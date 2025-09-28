@@ -1,0 +1,1 @@
+module test; assign c = a <-> b; endmodule

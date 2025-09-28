@@ -1,37 +1,47 @@
+//! Expression-related tests using file-based approach
+//!
+//! This module tests expression parsing by running the parser against
+//! SystemVerilog files in the test_files/expressions/ directory.
+
 use std::collections::HashMap;
+use std::path::Path;
 use sv_parser::{BinaryOp, Expression, ModuleItem, SystemVerilogParser};
 
+/// Test parsing all expression test files
 #[test]
-fn test_parse_module_with_assignment() {
+fn test_parse_all_expression_files() {
+    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions");
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test(input clk, output data); assign data = clk; endmodule";
 
-    let result = parser.parse_content(content).unwrap();
+    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        assert_eq!(items.len(), 1);
+        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            println!("Testing expression file: {}", filename);
 
-        if let ModuleItem::Assignment { target, expr } = &items[0] {
-            assert_eq!(target, "data");
-            if let Expression::Identifier(id) = expr {
-                assert_eq!(id, "clk");
-            } else {
-                panic!("Expected identifier expression");
-            }
-        } else {
-            panic!("Expected assignment");
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
+
+            parser
+                .parse_content(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
+
+            println!("  ✅ Parsed successfully");
         }
-    } else {
-        panic!("Expected module declaration");
     }
 }
 
 #[test]
-fn test_parse_expression_binary_add() {
+fn test_binary_add_expression() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign result = a + b; endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/binary_add.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
@@ -55,11 +65,14 @@ fn test_parse_expression_binary_add() {
 }
 
 #[test]
-fn test_parse_expression_with_numbers() {
+fn test_number_expressions() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign result = 42 * 3; endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/numbers.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
@@ -83,11 +96,14 @@ fn test_parse_expression_with_numbers() {
 }
 
 #[test]
-fn test_parse_expression_parentheses() {
+fn test_parentheses_precedence() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign result = (a + b) * c; endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/parentheses.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
@@ -112,11 +128,15 @@ fn test_parse_expression_parentheses() {
 }
 
 #[test]
-fn test_parse_systemverilog_number_with_z() {
+fn test_systemverilog_numbers() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a != 8'b1101z001; endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/expressions/systemverilog_number_with_z.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {

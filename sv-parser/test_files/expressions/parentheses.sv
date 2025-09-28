@@ -1,0 +1,1 @@
+module test; assign result = (a + b) * c; endmodule

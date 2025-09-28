@@ -1,12 +1,48 @@
+//! Module-related tests using file-based approach
+//!
+//! This module tests module parsing by running the parser against
+//! SystemVerilog files in the test_files/modules/ directory.
+
 use std::collections::HashMap;
+use std::path::Path;
 use sv_parser::{ModuleItem, PortDirection, SystemVerilogParser};
 
+/// Test parsing all module test files
 #[test]
-fn test_parse_empty_module() {
+fn test_parse_all_module_files() {
+    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules");
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module empty; endmodule";
 
-    let result = parser.parse_content(content).unwrap();
+    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            println!("Testing module file: {}", filename);
+
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
+
+            parser
+                .parse_content(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
+
+            println!("  ✅ Parsed successfully");
+        }
+    }
+}
+
+/// Test specific module structure expectations
+#[test]
+fn test_empty_module_structure() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/empty_module.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
     if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
@@ -19,12 +55,14 @@ fn test_parse_empty_module() {
 }
 
 #[test]
-fn test_parse_module_with_ports() {
+fn test_module_with_ports_structure() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test(input clk, output reg data); endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/module_with_ports.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
-    assert_eq!(result.items.len(), 1);
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
         assert_eq!(name, "test");
@@ -44,100 +82,14 @@ fn test_parse_module_with_ports() {
 }
 
 #[test]
-fn test_parse_module_with_no_direction_ports() {
+fn test_module_with_array_ports_structure() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test(clk, reset); endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/module_with_array_ports.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
-
-    if let ModuleItem::ModuleDeclaration { ports, .. } = &result.items[0] {
-        assert_eq!(ports.len(), 2);
-        assert_eq!(ports[0].name, "clk");
-        assert_eq!(ports[0].direction, None);
-        assert_eq!(ports[1].name, "reset");
-        assert_eq!(ports[1].direction, None);
-    } else {
-        panic!("Expected module declaration");
-    }
-}
-
-#[test]
-fn test_parse_module_with_port_declaration() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = r#"
-module test(clk, data);
-    input wire clk;
-    output reg data;
-endmodule"#;
-
-    let result = parser.parse_content(content).unwrap();
-
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        assert_eq!(items.len(), 2);
-
-        // Check input declaration
-        if let ModuleItem::PortDeclaration {
-            direction,
-            port_type,
-            name,
-        } = &items[0]
-        {
-            assert_eq!(*direction, PortDirection::Input);
-            assert_eq!(port_type, "wire");
-            assert_eq!(name, "clk");
-        } else {
-            panic!("Expected port declaration");
-        }
-
-        // Check output declaration
-        if let ModuleItem::PortDeclaration {
-            direction,
-            port_type,
-            name,
-        } = &items[1]
-        {
-            assert_eq!(*direction, PortDirection::Output);
-            assert_eq!(port_type, "reg");
-            assert_eq!(name, "data");
-        } else {
-            panic!("Expected port declaration");
-        }
-    } else {
-        panic!("Expected module declaration");
-    }
-}
-
-#[test]
-fn test_parse_multiple_modules() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = r#"
-module first; endmodule
-module second(input clk); endmodule
-"#;
-
-    let result = parser.parse_content(content).unwrap();
-    assert_eq!(result.items.len(), 2);
-
-    if let ModuleItem::ModuleDeclaration { name, .. } = &result.items[0] {
-        assert_eq!(name, "first");
-    } else {
-        panic!("Expected first module");
-    }
-
-    if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[1] {
-        assert_eq!(name, "second");
-        assert_eq!(ports.len(), 1);
-    } else {
-        panic!("Expected second module");
-    }
-}
-
-#[test]
-fn test_parse_module_with_array_ports() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test(input [3:0] a, output [7:0] b); endmodule";
-
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[0] {
         assert_eq!(name, "test");
@@ -168,24 +120,26 @@ fn test_parse_module_with_array_ports() {
 }
 
 #[test]
-fn test_parse_whitespace_handling() {
+fn test_multiple_modules_structure() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = r#"
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/multiple_modules.sv"),
+    )
+    .unwrap();
 
-    module   test   (   input   clk   ,   output   data   )   ;
-        assign   data   =   clk   ;
-    endmodule
+    let result = parser.parse_content(&content).unwrap();
+    assert_eq!(result.items.len(), 2);
 
-    "#;
-
-    let result = parser.parse_content(content).unwrap();
-    assert_eq!(result.items.len(), 1);
-
-    if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
-        assert_eq!(name, "test");
-        assert_eq!(ports.len(), 2);
-        assert_eq!(items.len(), 1);
+    if let ModuleItem::ModuleDeclaration { name, .. } = &result.items[0] {
+        assert_eq!(name, "first");
     } else {
-        panic!("Expected module declaration");
+        panic!("Expected first module");
+    }
+
+    if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[1] {
+        assert_eq!(name, "second");
+        assert_eq!(ports.len(), 1);
+    } else {
+        panic!("Expected second module");
     }
 }

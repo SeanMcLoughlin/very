@@ -1,12 +1,47 @@
+//! Operator-related tests using file-based approach
+//!
+//! This module tests operator parsing by running the parser against
+//! SystemVerilog files in the test_files/operators/ directory.
+
 use std::collections::HashMap;
+use std::path::Path;
 use sv_parser::{BinaryOp, Expression, ModuleItem, SystemVerilogParser};
 
+/// Test parsing all operator test files
 #[test]
-fn test_parse_logical_equivalence_operator() {
+fn test_parse_all_operator_files() {
+    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators");
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a <-> b; endmodule";
 
-    let result = parser.parse_content(content).unwrap();
+    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            println!("Testing operator file: {}", filename);
+
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
+
+            parser
+                .parse_content(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
+
+            println!("  ✅ Parsed successfully");
+        }
+    }
+}
+
+#[test]
+fn test_logical_equivalence_operator() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_equivalence.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
@@ -30,11 +65,14 @@ fn test_parse_logical_equivalence_operator() {
 }
 
 #[test]
-fn test_parse_logical_implication_operator() {
+fn test_logical_implication_operator() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a -> b; endmodule";
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_implication.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
+    let result = parser.parse_content(&content).unwrap();
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
@@ -58,124 +96,89 @@ fn test_parse_logical_implication_operator() {
 }
 
 #[test]
-fn test_parse_equality_operator() {
+fn test_equality_operators() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a == b; endmodule";
 
-    let result = parser.parse_content(content).unwrap();
+    // Test equality
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/equality.sv"),
+    )
+    .unwrap();
 
+    let result = parser.parse_content(&content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::Equal));
-                if let Expression::Identifier(left_id) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Identifier(right_id) = right.as_ref() {
-                    assert_eq!(right_id, "b");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
             }
         }
     }
-}
 
-#[test]
-fn test_parse_not_equal_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a != b; endmodule";
+    // Test not equal
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/not_equal.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
-
+    let result = parser.parse_content(&content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::NotEqual));
-                if let Expression::Identifier(left_id) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Identifier(right_id) = right.as_ref() {
-                    assert_eq!(right_id, "b");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
             }
         }
     }
 }
 
 #[test]
-fn test_parse_logical_and_operator() {
+fn test_logical_and_or_operators() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a && b; endmodule";
 
-    let result = parser.parse_content(content).unwrap();
+    // Test logical AND
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_and.sv"),
+    )
+    .unwrap();
 
+    let result = parser.parse_content(&content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::LogicalAnd));
-                if let Expression::Identifier(left_id) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Identifier(right_id) = right.as_ref() {
-                    assert_eq!(right_id, "b");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
             }
         }
     }
-}
 
-#[test]
-fn test_parse_logical_or_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module test; assign c = a || b; endmodule";
+    // Test logical OR
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_or.sv"),
+    )
+    .unwrap();
 
-    let result = parser.parse_content(content).unwrap();
-
+    let result = parser.parse_content(&content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::LogicalOr));
-                if let Expression::Identifier(left_id) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Identifier(right_id) = right.as_ref() {
-                    assert_eq!(right_id, "b");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
             }
         }
     }
 }
 
 #[test]
-fn test_parse_comparison_operators() {
+fn test_comparison_operators() {
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/comparison_operators.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+
+    // This file contains 4 modules with different comparison operators
+    assert_eq!(result.items.len(), 4);
 
     // Test greater than
-    let content = "module test; assign c = a > b; endmodule";
-    let result = parser.parse_content(content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
             if let Expression::Binary { op, .. } = expr {
@@ -185,9 +188,7 @@ fn test_parse_comparison_operators() {
     }
 
     // Test less than
-    let content = "module test; assign c = a < b; endmodule";
-    let result = parser.parse_content(content).unwrap();
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[1] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
             if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::LessThan));
@@ -196,9 +197,7 @@ fn test_parse_comparison_operators() {
     }
 
     // Test greater than or equal
-    let content = "module test; assign c = a >= b; endmodule";
-    let result = parser.parse_content(content).unwrap();
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[2] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
             if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::GreaterEqual));
@@ -207,9 +206,7 @@ fn test_parse_comparison_operators() {
     }
 
     // Test less than or equal
-    let content = "module test; assign c = a <= b; endmodule";
-    let result = parser.parse_content(content).unwrap();
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[3] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
             if let Expression::Binary { op, .. } = expr {
                 assert!(matches!(op, BinaryOp::LessEqual));

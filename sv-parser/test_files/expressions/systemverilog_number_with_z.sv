@@ -1,0 +1,1 @@
+module test; assign c = a != 8'b1101z001; endmodule

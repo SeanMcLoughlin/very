@@ -1,0 +1,1 @@
+module test; assign result = 42 * 3; endmodule
