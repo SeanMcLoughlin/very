@@ -48,23 +48,22 @@ pub enum ModuleItem {
         target: String,
         expr: Expression,
     },
-    // Add more as needed
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortDirection {
     Input,
     Output,
     Inout,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {
     pub name: String,
     pub direction: Option<PortDirection>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Identifier(String),
     Number(String),
@@ -75,7 +74,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryOp {
     Add,
     Sub,
