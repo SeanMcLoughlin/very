@@ -61,6 +61,13 @@ pub enum PortDirection {
 pub struct Port {
     pub name: String,
     pub direction: Option<PortDirection>,
+    pub range: Option<Range>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Range {
+    pub msb: String, // Most significant bit (e.g., "7" in [7:0])
+    pub lsb: String, // Least significant bit (e.g., "0" in [7:0])
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,4 +96,9 @@ pub enum BinaryOp {
     NotEqual,     // !=
     LogicalAnd,   // &&
     LogicalOr,    // ||
+    GreaterThan,  // >
+    LessThan,     // <
+    GreaterEqual, // >=
+    LessEqual,    // <=
+    Power,        // **
 }

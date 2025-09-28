@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
-use crate::{BinaryOp, Expression, ModuleItem, ParseError, Port, PortDirection, SourceUnit};
+use crate::{BinaryOp, Expression, ModuleItem, ParseError, Port, PortDirection, Range, SourceUnit};
 
 pub struct SystemVerilogParser {
     preprocessor: Preprocessor,
@@ -109,11 +109,16 @@ impl SystemVerilogParser {
 
             let binary_op = choice((
                 just("<->").to(BinaryOp::LogicalEquiv),
+                just("**").to(BinaryOp::Power),
+                just("<=").to(BinaryOp::LessEqual),
+                just(">=").to(BinaryOp::GreaterEqual),
                 just("&&").to(BinaryOp::LogicalAnd),
                 just("||").to(BinaryOp::LogicalOr),
                 just("->").to(BinaryOp::LogicalImpl),
                 just("==").to(BinaryOp::Equal),
                 just("!=").to(BinaryOp::NotEqual),
+                just('<').to(BinaryOp::LessThan),
+                just('>').to(BinaryOp::GreaterThan),
                 just('+').to(BinaryOp::Add),
                 just('-').to(BinaryOp::Sub),
                 just('*').to(BinaryOp::Mul),
@@ -141,29 +146,48 @@ impl SystemVerilogParser {
         ))
         .padded_by(whitespace.clone());
 
+        // Range parser [msb:lsb] e.g., [7:0] or [3:0]
+        let range = just('[')
+            .ignore_then(choice((number.clone(), identifier.clone())))
+            .then_ignore(just(':'))
+            .then(choice((number.clone(), identifier.clone())))
+            .then_ignore(just(']'))
+            .map(|(msb, lsb)| Range { msb, lsb })
+            .padded_by(whitespace.clone());
+
         // Port in module header can be:
         // - just identifier: clk
         // - direction + identifier: input clk
+        // - direction + range + identifier: input [3:0] clk
         // - direction + type + identifier: input wire clk
+        // - direction + type + range + identifier: input wire [3:0] clk
         let module_port = choice((
+            // direction + type + range + identifier: input wire [3:0] clk
             port_direction
                 .clone()
-                .then(identifier.clone()) // optional type
-                .then(identifier.clone())
-                .map(|((direction, _type), name)| Port {
+                .then(identifier.clone()) // type (wire, reg, etc.)
+                .then(range.clone().or_not())
+                .then(identifier.clone()) // name
+                .map(|(((direction, _type), range), name)| Port {
                     name,
                     direction: Some(direction),
+                    range,
                 }),
+            // direction + range + identifier: input [3:0] clk
             port_direction
                 .clone()
-                .then(identifier.clone())
-                .map(|(direction, name)| Port {
+                .then(range.clone().or_not())
+                .then(identifier.clone()) // name
+                .map(|((direction, range), name)| Port {
                     name,
                     direction: Some(direction),
+                    range,
                 }),
+            // just identifier: clk
             identifier.clone().map(|name| Port {
                 name,
                 direction: None,
+                range: None,
             }),
         ));
 

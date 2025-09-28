@@ -478,3 +478,87 @@ fn test_parse_logical_or_operator() {
         }
     }
 }
+
+#[test]
+fn test_parse_module_with_array_ports() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = "module test(input [3:0] a, output [7:0] b); endmodule";
+
+    let result = parser.parse_content(content).unwrap();
+
+    if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[0] {
+        assert_eq!(name, "test");
+        assert_eq!(ports.len(), 2);
+
+        // Check first port (input [3:0] a)
+        assert_eq!(ports[0].name, "a");
+        assert_eq!(ports[0].direction, Some(PortDirection::Input));
+        if let Some(ref range) = ports[0].range {
+            assert_eq!(range.msb, "3");
+            assert_eq!(range.lsb, "0");
+        } else {
+            panic!("Expected range for port a");
+        }
+
+        // Check second port (output [7:0] b)
+        assert_eq!(ports[1].name, "b");
+        assert_eq!(ports[1].direction, Some(PortDirection::Output));
+        if let Some(ref range) = ports[1].range {
+            assert_eq!(range.msb, "7");
+            assert_eq!(range.lsb, "0");
+        } else {
+            panic!("Expected range for port b");
+        }
+    } else {
+        panic!("Expected module declaration");
+    }
+}
+
+#[test]
+fn test_parse_comparison_operators() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+
+    // Test greater than
+    let content = "module test; assign c = a > b; endmodule";
+    let result = parser.parse_content(content).unwrap();
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+        if let ModuleItem::Assignment { expr, .. } = &items[0] {
+            if let Expression::Binary { op, .. } = expr {
+                assert!(matches!(op, BinaryOp::GreaterThan));
+            }
+        }
+    }
+
+    // Test less than
+    let content = "module test; assign c = a < b; endmodule";
+    let result = parser.parse_content(content).unwrap();
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+        if let ModuleItem::Assignment { expr, .. } = &items[0] {
+            if let Expression::Binary { op, .. } = expr {
+                assert!(matches!(op, BinaryOp::LessThan));
+            }
+        }
+    }
+
+    // Test greater than or equal
+    let content = "module test; assign c = a >= b; endmodule";
+    let result = parser.parse_content(content).unwrap();
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+        if let ModuleItem::Assignment { expr, .. } = &items[0] {
+            if let Expression::Binary { op, .. } = expr {
+                assert!(matches!(op, BinaryOp::GreaterEqual));
+            }
+        }
+    }
+
+    // Test less than or equal
+    let content = "module test; assign c = a <= b; endmodule";
+    let result = parser.parse_content(content).unwrap();
+    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+        if let ModuleItem::Assignment { expr, .. } = &items[0] {
+            if let Expression::Binary { op, .. } = expr {
+                assert!(matches!(op, BinaryOp::LessEqual));
+            }
+        }
+    }
+}
