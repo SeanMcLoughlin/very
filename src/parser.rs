@@ -43,7 +43,18 @@ impl SystemVerilogParser {
     }
 
     fn source_unit_parser(&self) -> impl Parser<char, SourceUnit, Error = Simple<char>> + Clone {
-        let whitespace = one_of(" \t\r\n").repeated();
+        // Comments
+        let line_comment = just("//").then(filter(|c| *c != '\n').repeated()).ignored();
+
+        let block_comment = just("/*")
+            .then(just("*/").not().rewind().then(any()).repeated())
+            .then(just("*/"))
+            .ignored();
+
+        let comment = choice((line_comment, block_comment));
+
+        let whitespace =
+            choice((one_of(" \t\r\n").repeated().at_least(1).ignored(), comment)).repeated();
 
         // Basic tokens
         let identifier = filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
@@ -56,11 +67,36 @@ impl SystemVerilogParser {
             })
             .padded_by(whitespace.clone());
 
-        let number = filter(|c: &char| c.is_ascii_digit())
-            .repeated()
-            .at_least(1)
-            .collect::<String>()
-            .padded_by(whitespace.clone());
+        // Support both simple numbers and SystemVerilog sized numbers like 8'b1101z001
+        let number = choice((
+            // SystemVerilog sized number: size'base_value (e.g., 8'b1101z001, 4'hA, 32'd123)
+            filter(|c: &char| c.is_ascii_digit())
+                .repeated()
+                .at_least(1)
+                .then_ignore(just('\''))
+                .then(one_of("bBdDhHoO"))
+                .then(
+                    filter(|c: &char| c.is_ascii_alphanumeric() || *c == '_')
+                        .repeated()
+                        .at_least(1),
+                )
+                .map(
+                    |((size_digits, base), value_chars): ((Vec<char>, char), Vec<char>)| {
+                        let mut result = String::new();
+                        result.extend(size_digits);
+                        result.push('\'');
+                        result.push(base);
+                        result.extend(value_chars);
+                        result
+                    },
+                ),
+            // Simple decimal number
+            filter(|c: &char| c.is_ascii_digit())
+                .repeated()
+                .at_least(1)
+                .collect::<String>(),
+        ))
+        .padded_by(whitespace.clone());
 
         // Simple expression parser
         let expr = recursive(|expr| {
@@ -72,6 +108,12 @@ impl SystemVerilogParser {
             .padded_by(whitespace.clone());
 
             let binary_op = choice((
+                just("<->").to(BinaryOp::LogicalEquiv),
+                just("&&").to(BinaryOp::LogicalAnd),
+                just("||").to(BinaryOp::LogicalOr),
+                just("->").to(BinaryOp::LogicalImpl),
+                just("==").to(BinaryOp::Equal),
+                just("!=").to(BinaryOp::NotEqual),
                 just('+').to(BinaryOp::Add),
                 just('-').to(BinaryOp::Sub),
                 just('*').to(BinaryOp::Mul),

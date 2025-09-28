@@ -18,15 +18,24 @@ fn test_parse_multiple_files() {
     let args = vec!["test1.sv".to_string(), "test2.sv".to_string()];
     let result = parse_vcs_style_args(args, false, false).unwrap();
 
-    assert_eq!(result.files, vec![PathBuf::from("test1.sv"), PathBuf::from("test2.sv")]);
+    assert_eq!(
+        result.files,
+        vec![PathBuf::from("test1.sv"), PathBuf::from("test2.sv")]
+    );
 }
 
 #[test]
 fn test_parse_incdir_single() {
-    let args = vec!["+incdir+/path/to/includes".to_string(), "test.sv".to_string()];
+    let args = vec![
+        "+incdir+/path/to/includes".to_string(),
+        "test.sv".to_string(),
+    ];
     let result = parse_vcs_style_args(args, false, false).unwrap();
 
-    assert_eq!(result.include_dirs, vec![PathBuf::from("/path/to/includes")]);
+    assert_eq!(
+        result.include_dirs,
+        vec![PathBuf::from("/path/to/includes")]
+    );
     assert_eq!(result.files, vec![PathBuf::from("test.sv")]);
 }
 
@@ -35,14 +44,14 @@ fn test_parse_incdir_multiple() {
     let args = vec![
         "+incdir+/path/one".to_string(),
         "+incdir+/path/two".to_string(),
-        "test.sv".to_string()
+        "test.sv".to_string(),
     ];
     let result = parse_vcs_style_args(args, false, false).unwrap();
 
-    assert_eq!(result.include_dirs, vec![
-        PathBuf::from("/path/one"),
-        PathBuf::from("/path/two")
-    ]);
+    assert_eq!(
+        result.include_dirs,
+        vec![PathBuf::from("/path/one"), PathBuf::from("/path/two")]
+    );
 }
 
 #[test]
@@ -67,15 +76,18 @@ fn test_parse_define_multiple() {
         "+define+DEBUG=1".to_string(),
         "+define+VERBOSE".to_string(),
         "+define+MODE=test".to_string(),
-        "test.sv".to_string()
+        "test.sv".to_string(),
     ];
     let result = parse_vcs_style_args(args, false, false).unwrap();
 
-    assert_eq!(result.defines, vec![
-        "DEBUG=1".to_string(),
-        "VERBOSE".to_string(),
-        "MODE=test".to_string()
-    ]);
+    assert_eq!(
+        result.defines,
+        vec![
+            "DEBUG=1".to_string(),
+            "VERBOSE".to_string(),
+            "MODE=test".to_string()
+        ]
+    );
 }
 
 #[test]
@@ -86,16 +98,22 @@ fn test_parse_mixed_args() {
         "test1.sv".to_string(),
         "+incdir+/more/includes".to_string(),
         "test2.sv".to_string(),
-        "+define+VERBOSE".to_string()
+        "+define+VERBOSE".to_string(),
     ];
     let result = parse_vcs_style_args(args, true, false).unwrap();
 
-    assert_eq!(result.files, vec![PathBuf::from("test1.sv"), PathBuf::from("test2.sv")]);
-    assert_eq!(result.include_dirs, vec![
-        PathBuf::from("/includes"),
-        PathBuf::from("/more/includes")
-    ]);
-    assert_eq!(result.defines, vec!["DEBUG=1".to_string(), "VERBOSE".to_string()]);
+    assert_eq!(
+        result.files,
+        vec![PathBuf::from("test1.sv"), PathBuf::from("test2.sv")]
+    );
+    assert_eq!(
+        result.include_dirs,
+        vec![PathBuf::from("/includes"), PathBuf::from("/more/includes")]
+    );
+    assert_eq!(
+        result.defines,
+        vec!["DEBUG=1".to_string(), "VERBOSE".to_string()]
+    );
     assert!(result.verbose);
     assert!(!result.syntax_only);
 }
@@ -158,7 +176,11 @@ fn test_parse_unsupported_vcs_option_warning() {
 
 #[test]
 fn test_skip_clap_flags() {
-    let args = vec!["-v".to_string(), "--verbose".to_string(), "test.sv".to_string()];
+    let args = vec![
+        "-v".to_string(),
+        "--verbose".to_string(),
+        "test.sv".to_string(),
+    ];
     let result = parse_vcs_style_args(args, false, false).unwrap();
 
     // Should skip the clap flags and just parse the file

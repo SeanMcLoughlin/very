@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use tempfile::TempDir;
 use sv_chumsky::preprocessor::Preprocessor;
+use tempfile::TempDir;
 
 fn create_temp_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     let file_path = dir.path().join(filename);
@@ -37,7 +37,6 @@ fn test_preprocess_macro_expansion() {
     assert!(result.contains("reg [8-1:0] data;"));
 }
 
-
 #[test]
 fn test_preprocess_define_with_value() {
     let mut preprocessor = Preprocessor::new(vec![], HashMap::new());
@@ -66,7 +65,10 @@ fn test_preprocess_include_relative() {
     let included_path = create_temp_file(&temp_dir, "included.sv", included_content);
 
     // Create main file
-    let main_content = format!("`include \"{}\"\nmodule test; endmodule", included_path.file_name().unwrap().to_str().unwrap());
+    let main_content = format!(
+        "`include \"{}\"\nmodule test; endmodule",
+        included_path.file_name().unwrap().to_str().unwrap()
+    );
     let main_path = create_temp_file(&temp_dir, "main.sv", &main_content);
 
     let mut preprocessor = Preprocessor::new(vec![], HashMap::new());
@@ -130,7 +132,10 @@ fn test_preprocess_include_not_found() {
     let result = preprocessor.preprocess_file(&main_path);
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("Include file 'nonexistent.sv' not found"));
+    assert!(result
+        .unwrap_err()
+        .message
+        .contains("Include file 'nonexistent.sv' not found"));
 }
 
 #[test]
@@ -142,11 +147,17 @@ fn test_preprocess_nested_includes() {
     let deep_path = create_temp_file(&temp_dir, "deep.sv", deep_content);
 
     // Create middle include
-    let middle_content = format!("`include \"{}\"\nparameter MID_PARAM = 24;", deep_path.file_name().unwrap().to_str().unwrap());
+    let middle_content = format!(
+        "`include \"{}\"\nparameter MID_PARAM = 24;",
+        deep_path.file_name().unwrap().to_str().unwrap()
+    );
     let middle_path = create_temp_file(&temp_dir, "middle.sv", &middle_content);
 
     // Create top include
-    let top_content = format!("`include \"{}\"\nmodule test; endmodule", middle_path.file_name().unwrap().to_str().unwrap());
+    let top_content = format!(
+        "`include \"{}\"\nmodule test; endmodule",
+        middle_path.file_name().unwrap().to_str().unwrap()
+    );
     let top_path = create_temp_file(&temp_dir, "top.sv", &top_content);
 
     let mut preprocessor = Preprocessor::new(vec![], HashMap::new());

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use sv_chumsky::{ModuleItem, SystemVerilogParser};
 use tempfile::TempDir;
-use sv_chumsky::{SystemVerilogParser, ModuleItem};
 
 fn create_temp_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     let file_path = dir.path().join(filename);
@@ -26,11 +26,6 @@ fn test_full_pipeline_simple_module() {
         assert_eq!(items.len(), 1);
     }
 }
-
-
-
-
-
 
 #[test]
 fn test_full_pipeline_error_handling() {
@@ -61,7 +56,10 @@ module test; endmodule
     let result = parser.parse_file(&file_path);
 
     assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("Include file 'nonexistent.sv' not found"));
+    assert!(result
+        .unwrap_err()
+        .message
+        .contains("Include file 'nonexistent.sv' not found"));
 }
 
 #[test]
@@ -73,4 +71,3 @@ fn test_full_pipeline_file_not_found() {
     assert!(result.is_err());
     assert!(result.unwrap_err().message.contains("Failed to read file"));
 }
-

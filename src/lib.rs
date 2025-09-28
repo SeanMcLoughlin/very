@@ -83,4 +83,10 @@ pub enum BinaryOp {
     And,
     Or,
     Xor,
+    LogicalEquiv, // <->
+    LogicalImpl,  // ->
+    Equal,        // ==
+    NotEqual,     // !=
+    LogicalAnd,   // &&
+    LogicalOr,    // ||
 }
