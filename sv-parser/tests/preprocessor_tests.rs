@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use sv_chumsky::preprocessor::Preprocessor;
+use sv_parser::preprocessor::Preprocessor;
 use tempfile::TempDir;
 
 fn create_temp_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {

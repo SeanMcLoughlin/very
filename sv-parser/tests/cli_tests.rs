@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use sv_chumsky::parse_vcs_style_args;
+use sv_parser::parse_vcs_style_args;
 
 #[test]
 fn test_parse_simple_file() {

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use sv_chumsky::{ModuleItem, SystemVerilogParser};
+use sv_parser::{ModuleItem, SystemVerilogParser};
 use tempfile::TempDir;
 
 fn create_temp_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {

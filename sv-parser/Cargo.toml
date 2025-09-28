@@ -1,0 +1,17 @@
+[package]
+name = "sv-parser"
+version = "0.1.0"
+edition = "2021"
+description = "A SystemVerilog parser using chumsky"
+
+[dependencies]
+chumsky = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "sv_chumsky_parse"
+path = "src/bin/sv_chumsky_parse.rs"

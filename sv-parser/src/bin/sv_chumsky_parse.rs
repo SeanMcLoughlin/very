@@ -1,7 +1,7 @@
 #!/usr/bin/env rust
 use clap::Parser;
 use std::process;
-use sv_chumsky::{parse_vcs_style_args, SystemVerilogParser};
+use sv_parser::{parse_vcs_style_args, SystemVerilogParser};
 
 #[derive(Parser)]
 #[command(name = "sv_chumsky_parse")]

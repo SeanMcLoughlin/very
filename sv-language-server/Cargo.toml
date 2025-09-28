@@ -1,0 +1,17 @@
+[package]
+name = "sv-language-server"
+version = "0.1.0"
+edition = "2021"
+description = "SystemVerilog Language Server using the sv-parser"
+
+[[bin]]
+name = "sv-language-server"
+path = "src/main.rs"
+
+[dependencies]
+sv-parser = { path = "../sv-parser" }
+tower-lsp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
