@@ -1,0 +1,14 @@
+[package]
+name = "sv-chumsky"
+version = "0.1.0"
+edition = "2021"
+description = "A SystemVerilog parser using chumsky"
+
+[dependencies]
+chumsky = "0.9"
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+
+[[bin]]
+name = "sv_chumsky_parse"
+path = "src/bin/sv_chumsky_parse.rs"
