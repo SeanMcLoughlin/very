@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
-use crate::{BinaryOp, Expression, ModuleItem, ParseError, Port, PortDirection, Range, SourceUnit};
+use crate::{
+    BinaryOp, Expression, ModuleItem, ParseError, Port, PortDirection, Range, SourceUnit, UnaryOp,
+};
 
 pub struct SystemVerilogParser {
     preprocessor: Preprocessor,
@@ -98,12 +100,40 @@ impl SystemVerilogParser {
         ))
         .padded_by(whitespace.clone());
 
-        // Simple expression parser
+        // Expression parser with unary and binary operators
         let expr = recursive(|expr| {
             let atom = choice((
                 identifier.clone().map(Expression::Identifier),
                 number.clone().map(Expression::Number),
-                expr.delimited_by(just('('), just(')')),
+                expr.clone().delimited_by(just('('), just(')')),
+            ))
+            .padded_by(whitespace.clone());
+
+            // Unary operators - note the order is important for correct parsing
+            let unary_op = choice((
+                just("~&").to(UnaryOp::ReductionNand),
+                just("~|").to(UnaryOp::ReductionNor),
+                just("~^").to(UnaryOp::ReductionXnor),
+                just("~").to(UnaryOp::Not),
+                just("!").to(UnaryOp::LogicalNot),
+                just("+").to(UnaryOp::Plus),
+                just("-").to(UnaryOp::Minus),
+                just("&").to(UnaryOp::ReductionAnd),
+                just("|").to(UnaryOp::ReductionOr),
+                just("^").to(UnaryOp::ReductionXor),
+            ))
+            .padded_by(whitespace.clone());
+
+            // Factor handles unary operators and atoms
+            let factor = choice((
+                unary_op
+                    .clone()
+                    .then(expr.clone())
+                    .map(|(op, operand)| Expression::Unary {
+                        op,
+                        operand: Box::new(operand),
+                    }),
+                atom.clone(),
             ))
             .padded_by(whitespace.clone());
 
@@ -129,8 +159,9 @@ impl SystemVerilogParser {
             ))
             .padded_by(whitespace.clone());
 
-            atom.clone()
-                .then(binary_op.then(atom).repeated())
+            factor
+                .clone()
+                .then(binary_op.then(factor).repeated())
                 .foldl(|left, (op, right)| Expression::Binary {
                     op,
                     left: Box::new(left),

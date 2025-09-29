@@ -79,6 +79,10 @@ pub enum Expression {
         left: Box<Expression>,
         right: Box<Expression>,
     },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expression>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,4 +105,18 @@ pub enum BinaryOp {
     GreaterEqual, // >=
     LessEqual,    // <=
     Power,        // **
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryOp {
+    Plus,          // +
+    Minus,         // -
+    Not,           // ~
+    ReductionAnd,  // &
+    ReductionOr,   // |
+    ReductionXor,  // ^
+    ReductionNand, // ~&
+    ReductionNor,  // ~|
+    ReductionXnor, // ~^
+    LogicalNot,    // !
 }
