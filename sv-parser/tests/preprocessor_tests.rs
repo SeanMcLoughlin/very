@@ -134,6 +134,7 @@ fn test_preprocess_include_not_found() {
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
+        .primary_error()
         .message
         .contains("Include file 'nonexistent.sv' not found"));
 }
@@ -210,5 +211,9 @@ fn test_preprocess_file_read_error() {
 
     let result = preprocessor.preprocess_file(&nonexistent_path);
     assert!(result.is_err());
-    assert!(result.unwrap_err().message.contains("Failed to read file"));
+    assert!(result
+        .unwrap_err()
+        .primary_error()
+        .message
+        .contains("Failed to read file"));
 }

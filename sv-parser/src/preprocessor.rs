@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ParseError;
+use crate::{ParseError, ParseErrorType, SingleParseError, SourceLocation};
 
 #[derive(Debug, Clone)]
 pub struct Preprocessor {
@@ -19,9 +19,11 @@ impl Preprocessor {
     }
 
     pub fn preprocess_file(&mut self, file_path: &Path) -> Result<String, ParseError> {
-        let content = fs::read_to_string(file_path).map_err(|e| ParseError {
-            message: format!("Failed to read file {}: {}", file_path.display(), e),
-            location: None,
+        let content = fs::read_to_string(file_path).map_err(|e| {
+            ParseError::new(SingleParseError::new(
+                format!("Failed to read file {}: {}", file_path.display(), e),
+                ParseErrorType::PreprocessorError,
+            ))
         })?;
 
         self.preprocess_content(&content, Some(file_path))
@@ -75,10 +77,10 @@ impl Preprocessor {
         // Parse `define MACRO_NAME value
         let parts: Vec<&str> = define_content.splitn(2, ' ').collect();
         if parts.is_empty() {
-            return Err(ParseError {
-                message: "Empty define directive".to_string(),
-                location: None,
-            });
+            return Err(ParseError::new(SingleParseError::new(
+                "Empty define directive".to_string(),
+                ParseErrorType::PreprocessorError,
+            )));
         }
 
         let macro_name = parts[0].to_string();
@@ -132,9 +134,22 @@ impl Preprocessor {
             }
         }
 
-        let include_path = found_path.ok_or_else(|| ParseError {
-            message: format!("Include file '{}' not found", filename),
-            location: Some((line_num, 1)),
+        let include_path = found_path.ok_or_else(|| {
+            ParseError::new(
+                SingleParseError::new(
+                    format!("Include file '{}' not found", filename),
+                    ParseErrorType::PreprocessorError,
+                )
+                .with_location(SourceLocation {
+                    line: line_num,
+                    column: 1,
+                    span: None,
+                })
+                .with_suggestion(format!(
+                    "Check if '{}' exists in include directories",
+                    filename
+                )),
+            )
         })?;
 
         // Recursively preprocess the included file

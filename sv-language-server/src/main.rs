@@ -131,19 +131,82 @@ impl Backend {
                     .await;
             }
             Err(parse_error) => {
-                // Parse failed - create diagnostic
+                // Parse failed - convert each error to a diagnostic
                 self.client
                     .log_message(MessageType::INFO, format!("Parse failed: {}", parse_error))
                     .await;
 
-                diagnostics.push(Diagnostic::new_simple(
-                    Range::new(Position::new(0, 0), Position::new(0, 0)),
-                    format!("Parse error: {}", parse_error),
-                ));
+                for error in &parse_error.errors {
+                    let range = if let Some(location) = &error.location {
+                        // Use actual error location
+                        let start_pos = Position::new(location.line as u32, location.column as u32);
+                        let end_pos = if let Some((_start_char, end_char)) = location.span {
+                            // Try to find end position from span
+                            self.char_offset_to_position(text, end_char)
+                                .unwrap_or(start_pos)
+                        } else {
+                            // Default to single character
+                            Position::new(location.line as u32, location.column as u32 + 1)
+                        };
+                        Range::new(start_pos, end_pos)
+                    } else {
+                        // Fallback to start of document
+                        Range::new(Position::new(0, 0), Position::new(0, 1))
+                    };
+
+                    let severity = match error.error_type {
+                        sv_parser::ParseErrorType::UnsupportedFeature(_) => {
+                            DiagnosticSeverity::WARNING
+                        }
+                        sv_parser::ParseErrorType::PreprocessorError => DiagnosticSeverity::ERROR,
+                        _ => DiagnosticSeverity::ERROR,
+                    };
+
+                    let mut diagnostic = Diagnostic {
+                        range,
+                        severity: Some(severity),
+                        code: None,
+                        code_description: None,
+                        source: Some("sv-parser".to_string()),
+                        message: error.message.clone(),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    };
+
+                    // Add suggestions as related information if available
+                    if !error.suggestions.is_empty() {
+                        diagnostic.message = format!(
+                            "{}\n\nSuggestions:\n{}",
+                            error.message,
+                            error
+                                .suggestions
+                                .iter()
+                                .map(|s| format!("  • {}", s))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        );
+                    }
+
+                    diagnostics.push(diagnostic);
+                }
             }
         }
 
         diagnostics
+    }
+
+    // Helper function to convert character offset to LSP Position
+    fn char_offset_to_position(&self, text: &str, offset: usize) -> Option<Position> {
+        if offset > text.len() {
+            return None;
+        }
+
+        let prefix = &text[..offset];
+        let line = prefix.matches('\n').count();
+        let column = prefix.split('\n').last().unwrap_or("").len();
+
+        Some(Position::new(line as u32, column as u32))
     }
 }
 

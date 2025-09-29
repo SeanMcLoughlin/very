@@ -4,7 +4,7 @@ use std::process;
 use sv_parser::{parse_vcs_style_args, SystemVerilogParser};
 
 #[derive(Parser)]
-#[command(name = "sv_chumsky_parse")]
+#[command(name = "sv_parser")]
 #[command(about = "A SystemVerilog parser using chumsky.")]
 #[command(version)]
 #[command(disable_help_flag = true)]
@@ -38,7 +38,7 @@ fn main() {
         Err(err) => {
             eprintln!("Error: {}", err);
             eprintln!();
-            eprintln!("Usage: sv_chumsky_parse [OPTIONS] [+incdir+<path>]... [+define+<macro>[=<value>]]... <file>...");
+            eprintln!("Usage: sv-parser [OPTIONS] [+incdir+<path>]... [+define+<macro>[=<value>]]... <file>...");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -v, --verbose        Verbose output (show parsed AST)");
@@ -50,9 +50,9 @@ fn main() {
             eprintln!("  +define+<macro>=<val> Define preprocessor macro");
             eprintln!();
             eprintln!("Examples:");
-            eprintln!("  sv_chumsky_parse design.sv");
-            eprintln!("  sv_chumsky_parse +incdir+/my/includes design.sv testbench.sv");
-            eprintln!("  sv_chumsky_parse +incdir+inc +define+DEBUG=1 design.sv");
+            eprintln!("  sv-parser design.sv");
+            eprintln!("  sv-parser +incdir+/my/includes design.sv testbench.sv");
+            eprintln!("  sv-parser +incdir+inc +define+DEBUG=1 design.sv");
             process::exit(1);
         }
     };
