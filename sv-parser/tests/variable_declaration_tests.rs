@@ -1,99 +1,31 @@
+//! Variable declaration tests using file-based approach
+//!
+//! This module tests variable declaration parsing by running the parser against
+//! SystemVerilog files in the test_files/variables/ directory.
+
 use std::collections::HashMap;
+use std::path::Path;
 use sv_parser::SystemVerilogParser;
 
+/// Test parsing all variable declaration test files
 #[test]
-fn test_wire_declaration() {
+fn test_parse_all_variable_files() {
+    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables");
     let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-wire a;
-endmodule
-";
 
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse wire declaration: {:?}",
-        result.err()
-    );
-}
+    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
 
-#[test]
-fn test_wire_declaration_with_width() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-wire [7:0] data;
-endmodule
-";
+        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
+            let filename = path.file_name().unwrap().to_str().unwrap();
 
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse wire declaration with width: {:?}",
-        result.err()
-    );
-}
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
 
-#[test]
-fn test_wire_declaration_with_init() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-wire [7:0] a = 8'b1101x001;
-endmodule
-";
-
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse wire declaration with initialization: {:?}",
-        result.err()
-    );
-}
-
-#[test]
-fn test_logic_declaration() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-logic clk;
-endmodule
-";
-
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse logic declaration: {:?}",
-        result.err()
-    );
-}
-
-#[test]
-fn test_int_declaration() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-int count;
-endmodule
-";
-
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse int declaration: {:?}",
-        result.err()
-    );
-}
-
-#[test]
-fn test_int_declaration_with_init() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = "module top();
-int a = 12;
-int b = 5;
-endmodule
-";
-
-    let result = parser.parse_content(content);
-    assert!(
-        result.is_ok(),
-        "Failed to parse int declaration with initialization: {:?}",
-        result.err()
-    );
+            parser
+                .parse_content(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
+        }
+    }
 }

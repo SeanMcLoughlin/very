@@ -33,12 +33,8 @@ fn test_parse_error_files() {
 
 fn test_directory(parser: &SystemVerilogParser, dir: &Path, expect_all_success: bool) {
     if !dir.exists() {
-        println!("Directory {:?} does not exist, skipping", dir);
         return;
     }
-
-    let mut passed = 0;
-    let mut failed = 0;
 
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
@@ -46,18 +42,11 @@ fn test_directory(parser: &SystemVerilogParser, dir: &Path, expect_all_success: 
 
         if path.extension().and_then(|s| s.to_str()) == Some("sv") {
             let filename = path.file_name().unwrap().to_str().unwrap();
-            println!("Testing file: {}", filename);
 
             match std::fs::read_to_string(&path) {
                 Ok(content) => match parser.parse_content(&content) {
-                    Ok(_) => {
-                        println!("  ✅ Parsed successfully");
-                        passed += 1;
-                    }
+                    Ok(_) => {}
                     Err(e) => {
-                        println!("  ❌ Parse error: {}", e);
-                        failed += 1;
-
                         if expect_all_success {
                             panic!(
                                 "Expected {} to parse successfully, but got error: {}",
@@ -67,9 +56,6 @@ fn test_directory(parser: &SystemVerilogParser, dir: &Path, expect_all_success: 
                     }
                 },
                 Err(e) => {
-                    println!("  ❌ Failed to read file: {}", e);
-                    failed += 1;
-
                     if expect_all_success {
                         panic!("Failed to read test file {}: {}", filename, e);
                     }
@@ -77,18 +63,10 @@ fn test_directory(parser: &SystemVerilogParser, dir: &Path, expect_all_success: 
             }
         }
     }
-
-    println!(
-        "Directory {:?}: {} passed, {} failed",
-        dir.file_name().unwrap(),
-        passed,
-        failed
-    );
 }
 
 fn test_directory_should_fail(parser: &SystemVerilogParser, dir: &Path) {
     if !dir.exists() {
-        println!("Directory {:?} does not exist, skipping", dir);
         return;
     }
 
@@ -98,16 +76,13 @@ fn test_directory_should_fail(parser: &SystemVerilogParser, dir: &Path) {
 
         if path.extension().and_then(|s| s.to_str()) == Some("sv") {
             let filename = path.file_name().unwrap().to_str().unwrap();
-            println!("Testing error file: {}", filename);
 
             match std::fs::read_to_string(&path) {
                 Ok(content) => match parser.parse_content(&content) {
                     Ok(_) => {
                         panic!("Expected {} to fail parsing, but it succeeded", filename);
                     }
-                    Err(_) => {
-                        println!("  ✅ Failed as expected");
-                    }
+                    Err(_) => {}
                 },
                 Err(e) => {
                     panic!("Failed to read error test file {}: {}", filename, e);

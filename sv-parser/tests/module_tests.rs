@@ -19,7 +19,6 @@ fn test_parse_all_module_files() {
 
         if path.extension().and_then(|s| s.to_str()) == Some("sv") {
             let filename = path.file_name().unwrap().to_str().unwrap();
-            println!("Testing module file: {}", filename);
 
             let content = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
@@ -27,8 +26,6 @@ fn test_parse_all_module_files() {
             parser
                 .parse_content(&content)
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
-
-            println!("  ✅ Parsed successfully");
         }
     }
 }

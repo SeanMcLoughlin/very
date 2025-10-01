@@ -19,7 +19,6 @@ fn test_parse_all_error_files() {
 
         if path.extension().and_then(|s| s.to_str()) == Some("sv") {
             let filename = path.file_name().unwrap().to_str().unwrap();
-            println!("Testing error file: {}", filename);
 
             let content = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
@@ -28,9 +27,7 @@ fn test_parse_all_error_files() {
                 Ok(_) => {
                     panic!("Expected {} to fail parsing, but it succeeded", filename);
                 }
-                Err(_) => {
-                    println!("  ✅ Failed as expected");
-                }
+                Err(_) => {}
             }
         }
     }
