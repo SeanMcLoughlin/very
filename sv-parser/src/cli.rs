@@ -7,12 +7,14 @@ pub struct ParsedArgs {
     pub defines: Vec<String>,
     pub verbose: bool,
     pub syntax_only: bool,
+    pub fail_fast: bool,
 }
 
 pub fn parse_vcs_style_args(
     raw_args: Vec<String>,
     verbose: bool,
     syntax_only: bool,
+    fail_fast: bool,
 ) -> Result<ParsedArgs, String> {
     let mut files = Vec::new();
     let mut include_dirs = Vec::new();
@@ -34,7 +36,12 @@ pub fn parse_vcs_style_args(
             eprintln!("Warning: Unsupported VCS option: {}", arg);
         } else if arg.starts_with('-') {
             // Skip clap flags that might have been passed through
-            if arg == "-v" || arg == "--verbose" || arg == "-s" || arg == "--syntax-only" {
+            if arg == "-v"
+                || arg == "--verbose"
+                || arg == "-s"
+                || arg == "--syntax-only"
+                || arg == "--fail-fast"
+            {
                 continue;
             }
             return Err(format!("Unknown option: {}", arg));
@@ -54,5 +61,6 @@ pub fn parse_vcs_style_args(
         defines,
         verbose,
         syntax_only,
+        fail_fast,
     })
 }

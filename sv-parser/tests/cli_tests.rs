@@ -4,19 +4,20 @@ use sv_parser::parse_vcs_style_args;
 #[test]
 fn test_parse_simple_file() {
     let args = vec!["test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(result.files, vec![PathBuf::from("test.sv")]);
     assert_eq!(result.include_dirs, Vec::<PathBuf>::new());
     assert_eq!(result.defines, Vec::<String>::new());
     assert!(!result.verbose);
     assert!(!result.syntax_only);
+    assert!(!result.fail_fast);
 }
 
 #[test]
 fn test_parse_multiple_files() {
     let args = vec!["test1.sv".to_string(), "test2.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(
         result.files,
@@ -30,7 +31,7 @@ fn test_parse_incdir_single() {
         "+incdir+/path/to/includes".to_string(),
         "test.sv".to_string(),
     ];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(
         result.include_dirs,
@@ -46,7 +47,7 @@ fn test_parse_incdir_multiple() {
         "+incdir+/path/two".to_string(),
         "test.sv".to_string(),
     ];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(
         result.include_dirs,
@@ -57,7 +58,7 @@ fn test_parse_incdir_multiple() {
 #[test]
 fn test_parse_define_with_value() {
     let args = vec!["+define+DEBUG=1".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(result.defines, vec!["DEBUG=1".to_string()]);
 }
@@ -65,7 +66,7 @@ fn test_parse_define_with_value() {
 #[test]
 fn test_parse_define_without_value() {
     let args = vec!["+define+DEBUG".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(result.defines, vec!["DEBUG".to_string()]);
 }
@@ -78,7 +79,7 @@ fn test_parse_define_multiple() {
         "+define+MODE=test".to_string(),
         "test.sv".to_string(),
     ];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     assert_eq!(
         result.defines,
@@ -100,7 +101,7 @@ fn test_parse_mixed_args() {
         "test2.sv".to_string(),
         "+define+VERBOSE".to_string(),
     ];
-    let result = parse_vcs_style_args(args, true, false).unwrap();
+    let result = parse_vcs_style_args(args, true, false, false).unwrap();
 
     assert_eq!(
         result.files,
@@ -121,16 +122,26 @@ fn test_parse_mixed_args() {
 #[test]
 fn test_parse_verbose_and_syntax_only() {
     let args = vec!["test.sv".to_string()];
-    let result = parse_vcs_style_args(args, true, true).unwrap();
+    let result = parse_vcs_style_args(args, true, true, false).unwrap();
 
     assert!(result.verbose);
     assert!(result.syntax_only);
 }
 
 #[test]
+fn test_parse_fail_fast() {
+    let args = vec!["test.sv".to_string()];
+    let result = parse_vcs_style_args(args, false, false, true).unwrap();
+
+    assert!(result.fail_fast);
+    assert!(!result.verbose);
+    assert!(!result.syntax_only);
+}
+
+#[test]
 fn test_parse_empty_incdir_error() {
     let args = vec!["+incdir+".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false);
+    let result = parse_vcs_style_args(args, false, false, false);
 
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "Empty path in +incdir+ directive");
@@ -139,7 +150,7 @@ fn test_parse_empty_incdir_error() {
 #[test]
 fn test_parse_empty_define_error() {
     let args = vec!["+define+".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false);
+    let result = parse_vcs_style_args(args, false, false, false);
 
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "Empty define in +define+ directive");
@@ -148,7 +159,7 @@ fn test_parse_empty_define_error() {
 #[test]
 fn test_parse_no_files_error() {
     let args = vec!["+incdir+/includes".to_string()];
-    let result = parse_vcs_style_args(args, false, false);
+    let result = parse_vcs_style_args(args, false, false, false);
 
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "No input files specified");
@@ -157,7 +168,7 @@ fn test_parse_no_files_error() {
 #[test]
 fn test_parse_unknown_option_error() {
     let args = vec!["--unknown".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false);
+    let result = parse_vcs_style_args(args, false, false, false);
 
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "Unknown option: --unknown");
@@ -166,7 +177,7 @@ fn test_parse_unknown_option_error() {
 #[test]
 fn test_parse_unsupported_vcs_option_warning() {
     let args = vec!["+timescale+1ns/1ps".to_string(), "test.sv".to_string()];
-    let result = parse_vcs_style_args(args, false, false);
+    let result = parse_vcs_style_args(args, false, false, false);
 
     // Should succeed but warn about unsupported option
     assert!(result.is_ok());
@@ -181,7 +192,7 @@ fn test_skip_clap_flags() {
         "--verbose".to_string(),
         "test.sv".to_string(),
     ];
-    let result = parse_vcs_style_args(args, false, false).unwrap();
+    let result = parse_vcs_style_args(args, false, false, false).unwrap();
 
     // Should skip the clap flags and just parse the file
     assert_eq!(result.files, vec![PathBuf::from("test.sv")]);

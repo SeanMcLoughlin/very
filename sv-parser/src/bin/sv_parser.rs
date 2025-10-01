@@ -24,6 +24,10 @@ struct Cli {
     /// Only check syntax without elaboration
     #[arg(short = 's', long = "syntax-only")]
     syntax_only: bool,
+
+    /// Stop parsing after the first error
+    #[arg(long = "fail-fast")]
+    fail_fast: bool,
 }
 
 fn main() {
@@ -33,6 +37,7 @@ fn main() {
         cli_args.args,
         cli_args.verbose,
         cli_args.syntax_only,
+        cli_args.fail_fast,
     ) {
         Ok(args) => args,
         Err(err) => {
@@ -43,6 +48,7 @@ fn main() {
             eprintln!("Options:");
             eprintln!("  -v, --verbose        Verbose output (show parsed AST)");
             eprintln!("  -s, --syntax-only    Only check syntax without elaboration");
+            eprintln!("      --fail-fast      Stop parsing after the first error");
             eprintln!("  -h, --help           Show this help message");
             eprintln!();
             eprintln!("VCS-style options:");
@@ -91,7 +97,15 @@ fn main() {
         }
 
         // Create a new parser instance for each file
-        let mut parser = SystemVerilogParser::new(include_paths.clone(), initial_macros.clone());
+        let mut parser = if parsed_args.fail_fast {
+            SystemVerilogParser::with_config(
+                include_paths.clone(),
+                initial_macros.clone(),
+                true,
+            )
+        } else {
+            SystemVerilogParser::new(include_paths.clone(), initial_macros.clone())
+        };
 
         match parser.parse_file(file_path) {
             Ok(ast) => {
@@ -108,6 +122,9 @@ fn main() {
             Err(parse_err) => {
                 eprintln!("Error parsing {}: {}", file_path.display(), parse_err);
                 had_errors = true;
+                if parsed_args.fail_fast {
+                    process::exit(1);
+                }
             }
         }
     }

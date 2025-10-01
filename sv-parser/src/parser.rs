@@ -16,12 +16,22 @@ struct ErrorInfo {
 
 pub struct SystemVerilogParser {
     preprocessor: Preprocessor,
+    fail_fast: bool,
 }
 
 impl SystemVerilogParser {
     pub fn new(include_dirs: Vec<PathBuf>, initial_macros: HashMap<String, String>) -> Self {
+        Self::with_config(include_dirs, initial_macros, false)
+    }
+
+    pub fn with_config(
+        include_dirs: Vec<PathBuf>,
+        initial_macros: HashMap<String, String>,
+        fail_fast: bool,
+    ) -> Self {
         Self {
             preprocessor: Preprocessor::new(include_dirs, initial_macros),
+            fail_fast,
         }
     }
 
@@ -109,6 +119,11 @@ impl SystemVerilogParser {
                 }
 
                 parse_errors.push(single_error);
+
+                // If fail-fast is enabled, stop after the first error
+                if self.fail_fast {
+                    break;
+                }
             }
 
             if parse_errors.is_empty() {
@@ -130,7 +145,10 @@ impl SystemVerilogParser {
                 });
 
                 // Try to find additional errors that the parser missed
-                self.find_additional_errors(content, &mut parse_errors);
+                // Skip this if fail-fast is enabled
+                if !self.fail_fast {
+                    self.find_additional_errors(content, &mut parse_errors);
+                }
 
                 ParseError::multiple(parse_errors)
             }
