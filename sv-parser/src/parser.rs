@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    AssignmentOp, BinaryOp, Expression, ModuleItem, ParseError, ParseErrorType, Port,
-    PortDirection, ProceduralBlockType, Range, SingleParseError, SourceLocation, SourceUnit,
-    Statement, UnaryOp,
+    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, Expression, ModuleItem, ParseError,
+    ParseErrorType, Port, PortDirection, ProceduralBlockType, Range, SingleParseError,
+    SourceLocation, SourceUnit, Statement, UnaryOp,
 };
 
 #[derive(Debug)]
@@ -368,6 +368,12 @@ impl SystemVerilogParser {
             || trimmed.starts_with("input")
             || trimmed.starts_with("output")
             || trimmed.starts_with("inout")
+            || trimmed.starts_with("class")
+            || trimmed.starts_with("endclass")
+            || trimmed.starts_with("function")
+            || trimmed.starts_with("endfunction")
+            || trimmed.starts_with("local")
+            || trimmed.starts_with("protected")
         {
             return None;
         }
@@ -974,7 +980,24 @@ impl SystemVerilogParser {
                 })
                 .padded_by(whitespace.clone());
 
+            // New expression (class instantiation) - parentheses are optional
+            let new_expr = just("new")
+                .then(
+                    expr.clone()
+                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .delimited_by(just('('), just(')'))
+                        .or_not(),
+                )
+                .map_with_span(
+                    |(_new, arguments), span: std::ops::Range<usize>| Expression::New {
+                        arguments: arguments.unwrap_or_default(),
+                        span: (span.start, span.end),
+                    },
+                )
+                .padded_by(whitespace.clone());
+
             let atom = choice((
+                new_expr,
                 system_function,
                 string_literal
                     .clone()
@@ -1061,7 +1084,8 @@ impl SystemVerilogParser {
                         Expression::Binary { span, .. }
                         | Expression::Unary { span, .. }
                         | Expression::MacroUsage { span, .. }
-                        | Expression::SystemFunctionCall { span, .. } => *span,
+                        | Expression::SystemFunctionCall { span, .. }
+                        | Expression::New { span, .. } => *span,
                     };
                     let right_span = match &right {
                         Expression::Identifier(_, s)
@@ -1070,7 +1094,8 @@ impl SystemVerilogParser {
                         Expression::Binary { span, .. }
                         | Expression::Unary { span, .. }
                         | Expression::MacroUsage { span, .. }
-                        | Expression::SystemFunctionCall { span, .. } => *span,
+                        | Expression::SystemFunctionCall { span, .. }
+                        | Expression::New { span, .. } => *span,
                     };
                     Expression::Binary {
                         op,
@@ -1188,17 +1213,17 @@ impl SystemVerilogParser {
 
         // Data type keywords
         let data_type = choice((
-            just("wire"),
-            just("logic"),
-            just("reg"),
-            just("int"),
-            just("bit"),
-            just("byte"),
-            just("shortint"),
-            just("longint"),
-            just("integer"),
+            just("wire").to("wire".to_string()),
+            just("logic").to("logic".to_string()),
+            just("reg").to("reg".to_string()),
+            just("int").to("int".to_string()),
+            just("bit").to("bit".to_string()),
+            just("byte").to("byte".to_string()),
+            just("shortint").to("shortint".to_string()),
+            just("longint").to("longint".to_string()),
+            just("integer").to("integer".to_string()),
+            just("time").to("time".to_string()),
         ))
-        .map(|s: &str| s.to_string())
         .padded_by(whitespace.clone());
 
         // Variable declaration with optional range and initialization
@@ -1218,18 +1243,17 @@ impl SystemVerilogParser {
             )
             .map(|((name, name_span), initial_value)| (name, name_span, initial_value));
 
-        let variable_declaration = data_type
+        // Variable declaration with built-in types
+        let builtin_var_decl = data_type
             .then(range.clone().or_not())
             .then(
                 single_var
+                    .clone()
                     .separated_by(just(',').padded_by(whitespace.clone()))
                     .at_least(1),
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(|((data_type, range), vars), span: std::ops::Range<usize>| {
-                // Create one VariableDeclaration for each variable in the list
-                // We'll return the first one and handle the rest differently
-                // For now, just return the first variable
                 let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
                 ModuleItem::VariableDeclaration {
                     data_type,
@@ -1239,8 +1263,38 @@ impl SystemVerilogParser {
                     initial_value,
                     span: (span.start, span.end),
                 }
-            })
+            });
+
+        // Variable declaration with built-in types only
+        let variable_declaration = builtin_var_decl
             .recover_with(skip_then_retry_until([';']))
+            .padded_by(whitespace.clone());
+
+        // Class-typed variable declaration (separate parser to control ordering)
+        // This matches: <identifier> <identifier> ;
+        // But we need to make sure the first identifier is NOT a reserved keyword
+        let class_var_decl = identifier
+            .clone()
+            .then(identifier_with_span.clone())
+            .then(
+                just('=')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(expr.clone())
+                    .or_not(),
+            )
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .map_with_span(
+                |((data_type, (name, name_span)), initial_value), span: std::ops::Range<usize>| {
+                    ModuleItem::VariableDeclaration {
+                        data_type,
+                        range: None,
+                        name,
+                        name_span,
+                        initial_value,
+                        span: (span.start, span.end),
+                    }
+                },
+            )
             .padded_by(whitespace.clone());
 
         // Port list in module header
@@ -1415,14 +1469,130 @@ impl SystemVerilogParser {
                 }
             });
 
-        // Module item
+        // Class qualifier parser (local or protected)
+        let class_qualifier = || {
+            choice((
+                just("local").to(ClassQualifier::Local),
+                just("protected").to(ClassQualifier::Protected),
+            ))
+            .padded_by(whitespace.clone())
+        };
+
+        // Class property parser
+        let class_property = class_qualifier()
+            .or_not()
+            .then(identifier.clone()) // data_type
+            .then(identifier_with_span.clone()) // name
+            .then(
+                just('=')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(expr.clone())
+                    .or_not(),
+            )
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .map_with_span(
+                |(((qualifier, data_type), (name, name_span)), initial_value),
+                 span: std::ops::Range<usize>| {
+                    ClassItem::Property {
+                        qualifier,
+                        data_type,
+                        name,
+                        name_span,
+                        initial_value,
+                        span: (span.start, span.end),
+                    }
+                },
+            );
+
+        // Class method parser
+        let class_method = class_qualifier()
+            .or_not()
+            .then_ignore(just("function").padded_by(whitespace.clone()))
+            .then(identifier.clone().then_ignore(whitespace.clone()).or_not()) // return_type (optional, defaults to void)
+            .then(identifier_with_span.clone()) // method name
+            .then(
+                // parameter list
+                just('(')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(just(')'))
+                    .to(Vec::new())
+                    .or(just('(')
+                        .padded_by(whitespace.clone())
+                        .ignore_then(
+                            identifier
+                                .clone()
+                                .separated_by(just(',').padded_by(whitespace.clone())),
+                        )
+                        .then_ignore(just(')').padded_by(whitespace.clone()))),
+            )
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .then(
+                // function body - statements until endfunction
+                statement
+                    .recover_with(skip_then_retry_until(['$', 'e']))
+                    .repeated(),
+            )
+            .then_ignore(just("endfunction").padded_by(whitespace.clone()))
+            .map_with_span(
+                |((((qualifier, return_type), (name, name_span)), _parameters), body),
+                 span: std::ops::Range<usize>| {
+                    ClassItem::Method {
+                        qualifier,
+                        return_type,
+                        name,
+                        name_span,
+                        parameters: Vec::new(), // simplified for now
+                        body,
+                        span: (span.start, span.end),
+                    }
+                },
+            );
+
+        // Class item
+        let class_item = choice((class_method, class_property));
+
+        // Class body
+        let class_body = class_item
+            .recover_with(skip_then_retry_until([';', 'l', 'p', 'f', 'e']))
+            .repeated();
+
+        // Class declaration
+        let class_declaration = just("class")
+            .padded_by(whitespace.clone())
+            .ignore_then(identifier_with_span.clone())
+            .then(
+                just("extends")
+                    .padded_by(whitespace.clone())
+                    .ignore_then(identifier.clone())
+                    .or_not(),
+            )
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .then(class_body)
+            .then_ignore(just("endclass").padded_by(whitespace.clone()))
+            .map_with_span(
+                |(((name, name_span), extends), items), span: std::ops::Range<usize>| {
+                    ModuleItem::ClassDeclaration {
+                        name: name.clone(),
+                        name_span,
+                        extends,
+                        items,
+                        span: (span.start, span.end),
+                    }
+                },
+            )
+            .padded_by(whitespace.clone());
+
+        // Module item - order matters! Put more specific parsers first
+        // class_var_decl is last because it can match any two identifiers
         let module_item = choice((
             define_directive.clone(),
             include_directive.clone(),
+            class_declaration.clone(),
             port_declaration,
             variable_declaration,
             assignment,
             procedural_block,
+            class_var_decl, // Must be last - matches any two identifiers
         ));
 
         // Module body with error recovery - try to parse multiple statements
@@ -1451,10 +1621,11 @@ impl SystemVerilogParser {
             )
             .padded_by(whitespace.clone());
 
-        // Top-level items (modules and preprocessor directives)
+        // Top-level items (modules, classes and preprocessor directives)
         let top_level_item = choice((
             define_directive.clone(),
             include_directive.clone(),
+            class_declaration,
             module_declaration,
         ));
 

@@ -1435,6 +1435,20 @@ impl Backend {
                     });
                 }
             }
+            ModuleItem::ClassDeclaration {
+                name, name_span, ..
+            } => {
+                // Add class declaration as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Module, // Reuse Module type for now
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // TODO: Extract class members (properties and methods) as symbols
+            }
         }
     }
 
@@ -1520,6 +1534,12 @@ impl Backend {
             }
             Expression::SystemFunctionCall { arguments, .. } => {
                 // Extract symbols from system function call arguments
+                for arg in arguments {
+                    self.extract_symbols_from_expression(arg, content, uri, symbols);
+                }
+            }
+            Expression::New { arguments, .. } => {
+                // Extract symbols from new expression arguments
                 for arg in arguments {
                     self.extract_symbols_from_expression(arg, content, uri, symbols);
                 }
@@ -1724,6 +1744,9 @@ impl Backend {
             }
             ModuleItem::IncludeDirective { .. } => {
                 // Include directives are single-line, no folding needed
+            }
+            ModuleItem::ClassDeclaration { .. } => {
+                // TODO: Add folding range support for classes
             }
         }
     }

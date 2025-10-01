@@ -180,6 +180,40 @@ pub enum ModuleItem {
         resolved_path: Option<std::path::PathBuf>, // the resolved absolute path
         span: Span,
     },
+    ClassDeclaration {
+        name: String,
+        name_span: Span,
+        extends: Option<String>,
+        items: Vec<ClassItem>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ClassItem {
+    Property {
+        qualifier: Option<ClassQualifier>,
+        data_type: String,
+        name: String,
+        name_span: Span,
+        initial_value: Option<Expression>,
+        span: Span,
+    },
+    Method {
+        qualifier: Option<ClassQualifier>,
+        return_type: Option<String>, // None for void
+        name: String,
+        name_span: Span,
+        parameters: Vec<String>, // simplified for now
+        body: Vec<Statement>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassQualifier {
+    Local,
+    Protected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,6 +305,10 @@ pub enum Expression {
     },
     SystemFunctionCall {
         name: String,
+        arguments: Vec<Expression>,
+        span: Span,
+    },
+    New {
         arguments: Vec<Expression>,
         span: Span,
     },
