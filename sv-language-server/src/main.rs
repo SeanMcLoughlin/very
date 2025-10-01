@@ -62,6 +62,164 @@ enum SymbolType {
 }
 
 #[derive(Debug, Clone)]
+struct SystemFunctionInfo {
+    signature: String,
+    description: String,
+}
+
+fn get_system_function_info(name: &str) -> Option<SystemFunctionInfo> {
+    match name {
+        // Math functions (Chapter 20.8)
+        "sin" => Some(SystemFunctionInfo {
+            signature: "function real $sin(real x)".to_string(),
+            description: "Returns the sine of x (x in radians)".to_string(),
+        }),
+        "cos" => Some(SystemFunctionInfo {
+            signature: "function real $cos(real x)".to_string(),
+            description: "Returns the cosine of x (x in radians)".to_string(),
+        }),
+        "tan" => Some(SystemFunctionInfo {
+            signature: "function real $tan(real x)".to_string(),
+            description: "Returns the tangent of x (x in radians)".to_string(),
+        }),
+        "asin" => Some(SystemFunctionInfo {
+            signature: "function real $asin(real x)".to_string(),
+            description: "Returns the arc sine of x".to_string(),
+        }),
+        "acos" => Some(SystemFunctionInfo {
+            signature: "function real $acos(real x)".to_string(),
+            description: "Returns the arc cosine of x".to_string(),
+        }),
+        "atan" => Some(SystemFunctionInfo {
+            signature: "function real $atan(real x)".to_string(),
+            description: "Returns the arc tangent of x".to_string(),
+        }),
+        "atan2" => Some(SystemFunctionInfo {
+            signature: "function real $atan2(real y, real x)".to_string(),
+            description: "Returns the arc tangent of y/x".to_string(),
+        }),
+        "sinh" => Some(SystemFunctionInfo {
+            signature: "function real $sinh(real x)".to_string(),
+            description: "Returns the hyperbolic sine of x".to_string(),
+        }),
+        "cosh" => Some(SystemFunctionInfo {
+            signature: "function real $cosh(real x)".to_string(),
+            description: "Returns the hyperbolic cosine of x".to_string(),
+        }),
+        "tanh" => Some(SystemFunctionInfo {
+            signature: "function real $tanh(real x)".to_string(),
+            description: "Returns the hyperbolic tangent of x".to_string(),
+        }),
+        "asinh" => Some(SystemFunctionInfo {
+            signature: "function real $asinh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic sine of x".to_string(),
+        }),
+        "acosh" => Some(SystemFunctionInfo {
+            signature: "function real $acosh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic cosine of x".to_string(),
+        }),
+        "atanh" => Some(SystemFunctionInfo {
+            signature: "function real $atanh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic tangent of x".to_string(),
+        }),
+        "exp" => Some(SystemFunctionInfo {
+            signature: "function real $exp(real x)".to_string(),
+            description: "Returns e to the power of x".to_string(),
+        }),
+        "ln" => Some(SystemFunctionInfo {
+            signature: "function real $ln(real x)".to_string(),
+            description: "Returns the natural logarithm of x".to_string(),
+        }),
+        "log10" => Some(SystemFunctionInfo {
+            signature: "function real $log10(real x)".to_string(),
+            description: "Returns the base-10 logarithm of x".to_string(),
+        }),
+        "sqrt" => Some(SystemFunctionInfo {
+            signature: "function real $sqrt(real x)".to_string(),
+            description: "Returns the square root of x".to_string(),
+        }),
+        "pow" => Some(SystemFunctionInfo {
+            signature: "function real $pow(real x, real y)".to_string(),
+            description: "Returns x to the power of y".to_string(),
+        }),
+        "hypot" => Some(SystemFunctionInfo {
+            signature: "function real $hypot(real x, real y)".to_string(),
+            description: "Returns sqrt(x^2 + y^2)".to_string(),
+        }),
+        "floor" => Some(SystemFunctionInfo {
+            signature: "function real $floor(real x)".to_string(),
+            description: "Returns the largest integer not greater than x".to_string(),
+        }),
+        "ceil" => Some(SystemFunctionInfo {
+            signature: "function real $ceil(real x)".to_string(),
+            description: "Returns the smallest integer not less than x".to_string(),
+        }),
+        "clog2" => Some(SystemFunctionInfo {
+            signature: "function integer $clog2(integer value)".to_string(),
+            description: "Returns the ceiling of log base 2 of value".to_string(),
+        }),
+
+        // Display tasks (Chapter 20)
+        "display" => Some(SystemFunctionInfo {
+            signature: "task $display([list_of_arguments])".to_string(),
+            description: "Displays the argument list and adds a newline".to_string(),
+        }),
+        "write" => Some(SystemFunctionInfo {
+            signature: "task $write([list_of_arguments])".to_string(),
+            description: "Displays the argument list without adding a newline".to_string(),
+        }),
+        "monitor" => Some(SystemFunctionInfo {
+            signature: "task $monitor([list_of_arguments])".to_string(),
+            description: "Continuously monitors and displays values when they change".to_string(),
+        }),
+
+        // Simulation control (Chapter 20.2)
+        "finish" => Some(SystemFunctionInfo {
+            signature: "task $finish[(n)]".to_string(),
+            description: "Terminates the simulation".to_string(),
+        }),
+        "stop" => Some(SystemFunctionInfo {
+            signature: "task $stop[(n)]".to_string(),
+            description: "Suspends the simulation".to_string(),
+        }),
+        "exit" => Some(SystemFunctionInfo {
+            signature: "task $exit".to_string(),
+            description: "Terminates the simulation".to_string(),
+        }),
+
+        // Time functions (Chapter 20.3)
+        "time" => Some(SystemFunctionInfo {
+            signature: "function time $time".to_string(),
+            description: "Returns the current simulation time as a 64-bit integer".to_string(),
+        }),
+        "stime" => Some(SystemFunctionInfo {
+            signature: "function int $stime".to_string(),
+            description: "Returns the current simulation time as a 32-bit integer".to_string(),
+        }),
+        "realtime" => Some(SystemFunctionInfo {
+            signature: "function realtime $realtime".to_string(),
+            description: "Returns the current simulation time as a real number".to_string(),
+        }),
+
+        // Random number generation (Chapter 20.15)
+        "random" => Some(SystemFunctionInfo {
+            signature: "function int $random[(seed)]".to_string(),
+            description: "Returns a random 32-bit signed integer".to_string(),
+        }),
+        "urandom" => Some(SystemFunctionInfo {
+            signature: "function int $urandom[(seed)]".to_string(),
+            description: "Returns a random 32-bit unsigned integer".to_string(),
+        }),
+        "urandom_range" => Some(SystemFunctionInfo {
+            signature: "function int $urandom_range(int maxval, int minval = 0)".to_string(),
+            description: "Returns a random integer within the specified range".to_string(),
+        }),
+
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
 struct DocumentState {
     content: String,
     ast: Option<SourceUnit>,
@@ -151,6 +309,7 @@ impl LanguageServer for Backend {
                 type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -678,6 +837,53 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
+    async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Check if hovering over a system function call
+        if let Some(ast) = &doc_state.ast {
+            if let Some(hover_info) =
+                self.find_hover_at_position(&ast.items, &doc_state.content, position)
+            {
+                return Ok(Some(hover_info));
+            }
+        }
+
+        // Check if hovering over a symbol (module, variable, etc.)
+        if let Some(symbol) = doc_state
+            .symbols
+            .iter()
+            .find(|s| self.position_in_range(position, s.range))
+        {
+            let hover_text = match symbol.symbol_type {
+                SymbolType::Module => format!("```systemverilog\nmodule {}\n```", symbol.name),
+                SymbolType::Variable => format!("```systemverilog\n{}\n```", symbol.name),
+                SymbolType::Port => format!("```systemverilog\nport {}\n```", symbol.name),
+                SymbolType::Define => format!("```systemverilog\n`define {}\n```", symbol.name),
+                SymbolType::Include => {
+                    format!("```systemverilog\n`include \"{}\"\n```", symbol.name)
+                }
+            };
+
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: hover_text,
+                }),
+                range: Some(symbol.range),
+            }));
+        }
+
+        Ok(None)
+    }
+
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         self.client
             .log_message(MessageType::INFO, "Configuration changed")
@@ -914,6 +1120,174 @@ impl Backend {
         let start_pos = self.char_offset_to_position(text, span.0)?;
         let end_pos = self.char_offset_to_position(text, span.1)?;
         Some(Range::new(start_pos, end_pos))
+    }
+
+    // Find hover information at a specific position
+    fn find_hover_at_position(
+        &self,
+        items: &[ModuleItem],
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        for item in items {
+            if let Some(hover) = self.find_hover_in_item(item, content, position) {
+                return Some(hover);
+            }
+        }
+        None
+    }
+
+    // Recursively search for hover information in a module item
+    fn find_hover_in_item(
+        &self,
+        item: &ModuleItem,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                items,
+                ..
+            } => {
+                // Check if hovering over module name
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    if self.position_in_range(position, range) {
+                        return Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: format!("```systemverilog\nmodule {}\n```", name),
+                            }),
+                            range: Some(range),
+                        });
+                    }
+                }
+
+                // Recursively search in module items
+                for sub_item in items {
+                    if let Some(hover) = self.find_hover_in_item(sub_item, content, position) {
+                        return Some(hover);
+                    }
+                }
+            }
+            ModuleItem::ProceduralBlock { statements, .. } => {
+                // Check for system function calls in statements
+                for stmt in statements {
+                    if let Some(hover) = self.find_hover_in_statement(stmt, content, position) {
+                        return Some(hover);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    // Find hover information in a statement
+    fn find_hover_in_statement(
+        &self,
+        stmt: &sv_parser::Statement,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match stmt {
+            sv_parser::Statement::SystemCall { name, span, args } => {
+                // First, check if we're hovering over any nested system function calls in the arguments
+                for arg in args {
+                    if let Some(hover) = self.find_hover_in_expression(arg, content, position) {
+                        return Some(hover);
+                    }
+                }
+
+                // If not hovering over arguments, check if hovering over the system call name itself
+                if let Some(range) = self.span_to_range(content, *span) {
+                    if self.position_in_range(position, range) {
+                        if let Some(info) = get_system_function_info(name) {
+                            return Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!(
+                                        "```systemverilog\n{}\n```\n\n{}",
+                                        info.signature, info.description
+                                    ),
+                                }),
+                                range: Some(range),
+                            });
+                        }
+                    }
+                }
+            }
+            sv_parser::Statement::Assignment { expr, .. } => {
+                // Check if there's a system function call in the expression
+                if let Some(hover) = self.find_hover_in_expression(expr, content, position) {
+                    return Some(hover);
+                }
+            }
+        }
+        None
+    }
+
+    // Find hover information in an expression
+    fn find_hover_in_expression(
+        &self,
+        expr: &Expression,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match expr {
+            Expression::SystemFunctionCall {
+                name,
+                span,
+                arguments,
+                ..
+            } => {
+                if let Some(range) = self.span_to_range(content, *span) {
+                    if self.position_in_range(position, range) {
+                        if let Some(info) = get_system_function_info(name) {
+                            return Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!(
+                                        "```systemverilog\n{}\n```\n\n{}",
+                                        info.signature, info.description
+                                    ),
+                                }),
+                                range: Some(range),
+                            });
+                        }
+                    }
+                }
+                // Also check arguments
+                for arg in arguments {
+                    if let Some(hover) = self.find_hover_in_expression(arg, content, position) {
+                        return Some(hover);
+                    }
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                if let Some(hover) = self.find_hover_in_expression(left, content, position) {
+                    return Some(hover);
+                }
+                if let Some(hover) = self.find_hover_in_expression(right, content, position) {
+                    return Some(hover);
+                }
+            }
+            Expression::Unary { operand, .. } => {
+                if let Some(hover) = self.find_hover_in_expression(operand, content, position) {
+                    return Some(hover);
+                }
+            }
+            Expression::MacroUsage { arguments, .. } => {
+                for arg in arguments {
+                    if let Some(hover) = self.find_hover_in_expression(arg, content, position) {
+                        return Some(hover);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
     }
 
     // Extract symbols from AST recursively
