@@ -204,3 +204,41 @@ fn test_class_in_module() {
         _ => panic!("Expected module declaration"),
     }
 }
+
+#[test]
+fn test_class_with_member_access() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test_files/classes/class_with_member_access.sv");
+    let content = std::fs::read_to_string(&test_file).expect("Failed to read test file");
+
+    let result = parser.parse_content(&content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse class with member access: {:?}",
+        result
+    );
+
+    let ast = result.unwrap();
+    match &ast.items[0] {
+        ModuleItem::ClassDeclaration { name, items, .. } => {
+            assert_eq!(name, "test_cls");
+            assert_eq!(items.len(), 2);
+
+            match &items[0] {
+                ClassItem::Property { name, .. } => {
+                    assert_eq!(name, "prop_a");
+                }
+                _ => panic!("Expected property"),
+            }
+
+            match &items[1] {
+                ClassItem::Property { name, .. } => {
+                    assert_eq!(name, "prop_b");
+                }
+                _ => panic!("Expected property"),
+            }
+        }
+        _ => panic!("Expected class declaration"),
+    }
+}

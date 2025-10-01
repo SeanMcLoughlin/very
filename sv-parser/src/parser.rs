@@ -1033,7 +1033,36 @@ impl SystemVerilogParser {
             ))
             .padded_by(whitespace.clone());
 
-            // Factor handles unary operators and atoms
+            // Member access handles dot notation (e.g., obj.property)
+            let member_access = atom
+                .clone()
+                .then(
+                    just('.')
+                        .ignore_then(identifier_with_span.clone())
+                        .repeated(),
+                )
+                .foldl(|object, (member, member_span)| {
+                    let start = match &object {
+                        Expression::Identifier(_, span)
+                        | Expression::Number(_, span)
+                        | Expression::StringLiteral(_, span)
+                        | Expression::Binary { span, .. }
+                        | Expression::Unary { span, .. }
+                        | Expression::MacroUsage { span, .. }
+                        | Expression::SystemFunctionCall { span, .. }
+                        | Expression::New { span, .. }
+                        | Expression::MemberAccess { span, .. } => span.0,
+                    };
+                    Expression::MemberAccess {
+                        object: Box::new(object),
+                        member,
+                        member_span,
+                        span: (start, member_span.1),
+                    }
+                })
+                .padded_by(whitespace.clone());
+
+            // Factor handles unary operators and member access
             let factor = choice((
                 unary_op.clone().then(expr.clone()).map_with_span(
                     |(op, operand), span: std::ops::Range<usize>| Expression::Unary {
@@ -1042,7 +1071,7 @@ impl SystemVerilogParser {
                         span: (span.start, span.end),
                     },
                 ),
-                atom.clone(),
+                member_access,
             ))
             .padded_by(whitespace.clone());
 
@@ -1085,7 +1114,8 @@ impl SystemVerilogParser {
                         | Expression::Unary { span, .. }
                         | Expression::MacroUsage { span, .. }
                         | Expression::SystemFunctionCall { span, .. }
-                        | Expression::New { span, .. } => *span,
+                        | Expression::New { span, .. }
+                        | Expression::MemberAccess { span, .. } => *span,
                     };
                     let right_span = match &right {
                         Expression::Identifier(_, s)
@@ -1095,7 +1125,8 @@ impl SystemVerilogParser {
                         | Expression::Unary { span, .. }
                         | Expression::MacroUsage { span, .. }
                         | Expression::SystemFunctionCall { span, .. }
-                        | Expression::New { span, .. } => *span,
+                        | Expression::New { span, .. }
+                        | Expression::MemberAccess { span, .. } => *span,
                     };
                     Expression::Binary {
                         op,

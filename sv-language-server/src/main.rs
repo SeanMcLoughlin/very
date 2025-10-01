@@ -1285,6 +1285,12 @@ impl Backend {
                     }
                 }
             }
+            Expression::MemberAccess { object, .. } => {
+                // Check hover in the object expression
+                if let Some(hover) = self.find_hover_in_expression(object, content, position) {
+                    return Some(hover);
+                }
+            }
             _ => {}
         }
         None
@@ -1436,7 +1442,10 @@ impl Backend {
                 }
             }
             ModuleItem::ClassDeclaration {
-                name, name_span, ..
+                name,
+                name_span,
+                items,
+                ..
             } => {
                 // Add class declaration as a symbol
                 if let Some(range) = self.span_to_range(content, *name_span) {
@@ -1447,7 +1456,10 @@ impl Backend {
                         uri: uri.clone(),
                     });
                 }
-                // TODO: Extract class members (properties and methods) as symbols
+                // Extract class members (properties and methods) as symbols
+                for class_item in items {
+                    self.extract_symbols_from_class_item(class_item, content, uri, symbols);
+                }
             }
         }
     }
@@ -1544,8 +1556,79 @@ impl Backend {
                     self.extract_symbols_from_expression(arg, content, uri, symbols);
                 }
             }
+            Expression::MemberAccess {
+                object,
+                member,
+                member_span,
+                ..
+            } => {
+                // Extract the object expression
+                self.extract_symbols_from_expression(object, content, uri, symbols);
+                // Extract the member as a symbol
+                if let Some(range) = self.span_to_range(content, *member_span) {
+                    symbols.push(Symbol {
+                        name: member.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
             Expression::Number(_, _) | Expression::StringLiteral(_, _) => {
                 // Numbers and string literals are not identifiers we care about for renaming
+            }
+        }
+    }
+
+    // Extract symbols from class items (properties and methods)
+    fn extract_symbols_from_class_item(
+        &self,
+        class_item: &sv_parser::ClassItem,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        use sv_parser::ClassItem;
+        match class_item {
+            ClassItem::Property {
+                name,
+                name_span,
+                initial_value,
+                ..
+            } => {
+                // Add property as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from initial value if present
+                if let Some(expr) = initial_value {
+                    self.extract_symbols_from_expression(expr, content, uri, symbols);
+                }
+            }
+            ClassItem::Method {
+                name,
+                name_span,
+                body,
+                ..
+            } => {
+                // Add method as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable, // Could add a Method type later
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from method body statements
+                for statement in body {
+                    self.extract_symbols_from_statement(statement, content, uri, symbols);
+                }
             }
         }
     }

@@ -312,6 +312,12 @@ pub enum Expression {
         arguments: Vec<Expression>,
         span: Span,
     },
+    MemberAccess {
+        object: Box<Expression>,
+        member: String,
+        member_span: Span,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
