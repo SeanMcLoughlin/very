@@ -43,28 +43,27 @@ fn test_binary_add_expression() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary {
-                op, left, right, ..
-            } = expr
-            {
-                assert!(matches!(op, BinaryOp::Add));
-                if let Expression::Identifier(left_id, _) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Identifier(right_id, _) = right.as_ref() {
-                    assert_eq!(right_id, "b");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
-            }
-        }
-    }
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        panic!("Expected assignment");
+    };
+    let Expression::Binary {
+        op, left, right, ..
+    } = expr
+    else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::Add));
+    let Expression::Identifier(left_id, _) = left.as_ref() else {
+        panic!("Expected identifier on left");
+    };
+    assert_eq!(left_id, "a");
+    let Expression::Identifier(right_id, _) = right.as_ref() else {
+        panic!("Expected identifier on right");
+    };
+    assert_eq!(right_id, "b");
 }
 
 #[test]
@@ -77,28 +76,27 @@ fn test_number_expressions() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary {
-                op, left, right, ..
-            } = expr
-            {
-                assert!(matches!(op, BinaryOp::Mul));
-                if let Expression::Number(left_num, _) = left.as_ref() {
-                    assert_eq!(left_num, "42");
-                } else {
-                    panic!("Expected number on left");
-                }
-                if let Expression::Number(right_num, _) = right.as_ref() {
-                    assert_eq!(right_num, "3");
-                } else {
-                    panic!("Expected number on right");
-                }
-            } else {
-                panic!("Expected binary expression");
-            }
-        }
-    }
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        panic!("Expected assignment");
+    };
+    let Expression::Binary {
+        op, left, right, ..
+    } = expr
+    else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::Mul));
+    let Expression::Number(left_num, _) = left.as_ref() else {
+        panic!("Expected number on left");
+    };
+    assert_eq!(left_num, "42");
+    let Expression::Number(right_num, _) = right.as_ref() else {
+        panic!("Expected number on right");
+    };
+    assert_eq!(right_num, "3");
 }
 
 #[test]
@@ -111,29 +109,28 @@ fn test_parentheses_precedence() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            // Should parse as: (a + b) * c
-            if let Expression::Binary {
-                op, left, right, ..
-            } = expr
-            {
-                assert!(matches!(op, BinaryOp::Mul));
-                if let Expression::Binary { op: left_op, .. } = left.as_ref() {
-                    assert!(matches!(left_op, BinaryOp::Add));
-                } else {
-                    panic!("Expected binary expression on left");
-                }
-                if let Expression::Identifier(right_id, _) = right.as_ref() {
-                    assert_eq!(right_id, "c");
-                } else {
-                    panic!("Expected identifier on right");
-                }
-            } else {
-                panic!("Expected binary expression");
-            }
-        }
-    }
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        panic!("Expected assignment");
+    };
+    // Should parse as: (a + b) * c
+    let Expression::Binary {
+        op, left, right, ..
+    } = expr
+    else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::Mul));
+    let Expression::Binary { op: left_op, .. } = left.as_ref() else {
+        panic!("Expected binary expression on left");
+    };
+    assert!(matches!(left_op, BinaryOp::Add));
+    let Expression::Identifier(right_id, _) = right.as_ref() else {
+        panic!("Expected identifier on right");
+    };
+    assert_eq!(right_id, "c");
 }
 
 #[test]
@@ -147,26 +144,25 @@ fn test_systemverilog_numbers() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
-        if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary {
-                op, left, right, ..
-            } = expr
-            {
-                assert!(matches!(op, BinaryOp::NotEqual));
-                if let Expression::Identifier(left_id, _) = left.as_ref() {
-                    assert_eq!(left_id, "a");
-                } else {
-                    panic!("Expected identifier on left");
-                }
-                if let Expression::Number(right_num, _) = right.as_ref() {
-                    assert_eq!(right_num, "8'b1101z001");
-                } else {
-                    panic!("Expected number on right");
-                }
-            } else {
-                panic!("Expected binary expression");
-            }
-        }
-    }
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        panic!("Expected assignment");
+    };
+    let Expression::Binary {
+        op, left, right, ..
+    } = expr
+    else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::NotEqual));
+    let Expression::Identifier(left_id, _) = left.as_ref() else {
+        panic!("Expected identifier on left");
+    };
+    assert_eq!(left_id, "a");
+    let Expression::Number(right_num, _) = right.as_ref() else {
+        panic!("Expected number on right");
+    };
+    assert_eq!(right_num, "8'b1101z001");
 }
