@@ -45,7 +45,10 @@ fn test_empty_module_structure() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
-    if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration {
+        name, ports, items, ..
+    } = &result.items[0]
+    {
         assert_eq!(name, "empty");
         assert_eq!(ports.len(), 0);
         assert_eq!(items.len(), 0);
@@ -64,7 +67,10 @@ fn test_module_with_ports_structure() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration {
+        name, ports, items, ..
+    } = &result.items[0]
+    {
         assert_eq!(name, "test");
         assert_eq!(ports.len(), 2);
         assert_eq!(items.len(), 0);

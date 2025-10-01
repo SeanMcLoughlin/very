@@ -134,7 +134,10 @@ mod specific_tests {
         let result = parser.parse_content(&content).unwrap();
         assert_eq!(result.items.len(), 1);
 
-        if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
+        if let ModuleItem::ModuleDeclaration {
+            name, ports, items, ..
+        } = &result.items[0]
+        {
             assert_eq!(name, "empty");
             assert_eq!(ports.len(), 0);
             assert_eq!(items.len(), 0);
@@ -153,7 +156,10 @@ mod specific_tests {
 
         let result = parser.parse_content(&content).unwrap();
 
-        if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
+        if let ModuleItem::ModuleDeclaration {
+            name, ports, items, ..
+        } = &result.items[0]
+        {
             assert_eq!(name, "test");
             assert_eq!(ports.len(), 2);
             assert_eq!(items.len(), 0);
@@ -182,14 +188,17 @@ mod specific_tests {
 
         if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
             if let ModuleItem::Assignment { expr, .. } = &items[0] {
-                if let Expression::Binary { op, left, right } = expr {
+                if let Expression::Binary {
+                    op, left, right, ..
+                } = expr
+                {
                     assert!(matches!(op, BinaryOp::Add));
-                    if let Expression::Identifier(left_id) = left.as_ref() {
+                    if let Expression::Identifier(left_id, _) = left.as_ref() {
                         assert_eq!(left_id, "a");
                     } else {
                         panic!("Expected identifier on left");
                     }
-                    if let Expression::Identifier(right_id) = right.as_ref() {
+                    if let Expression::Identifier(right_id, _) = right.as_ref() {
                         assert_eq!(right_id, "b");
                     } else {
                         panic!("Expected identifier on right");

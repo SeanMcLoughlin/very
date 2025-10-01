@@ -45,14 +45,17 @@ fn test_logical_equivalence_operator() {
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::LogicalEquiv));
-                if let Expression::Identifier(left_id) = left.as_ref() {
+                if let Expression::Identifier(left_id, _) = left.as_ref() {
                     assert_eq!(left_id, "a");
                 } else {
                     panic!("Expected identifier on left");
                 }
-                if let Expression::Identifier(right_id) = right.as_ref() {
+                if let Expression::Identifier(right_id, _) = right.as_ref() {
                     assert_eq!(right_id, "b");
                 } else {
                     panic!("Expected identifier on right");
@@ -76,14 +79,17 @@ fn test_logical_implication_operator() {
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::LogicalImpl));
-                if let Expression::Identifier(left_id) = left.as_ref() {
+                if let Expression::Identifier(left_id, _) = left.as_ref() {
                     assert_eq!(left_id, "a");
                 } else {
                     panic!("Expected identifier on left");
                 }
-                if let Expression::Identifier(right_id) = right.as_ref() {
+                if let Expression::Identifier(right_id, _) = right.as_ref() {
                     assert_eq!(right_id, "b");
                 } else {
                     panic!("Expected identifier on right");
@@ -228,9 +234,9 @@ fn test_unary_operators() {
     let result = parser.parse_content(&content).unwrap();
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Unary { op, operand } = expr {
+            if let Expression::Unary { op, operand, .. } = expr {
                 assert!(matches!(op, UnaryOp::Not));
-                if let Expression::Identifier(id) = operand.as_ref() {
+                if let Expression::Identifier(id, _) = operand.as_ref() {
                     assert_eq!(id, "a");
                 } else {
                     panic!("Expected identifier operand");

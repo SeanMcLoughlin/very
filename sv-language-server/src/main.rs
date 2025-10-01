@@ -252,6 +252,16 @@ impl LanguageServer for Backend {
         let position = params.text_document_position.position;
         let new_name = params.new_name;
 
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Rename at position {}:{}",
+                    position.line, position.character
+                ),
+            )
+            .await;
+
         // Get the document state
         let doc_symbols = {
             let docs = self.documents.read().await;
@@ -266,12 +276,42 @@ impl LanguageServer for Backend {
             }
         };
 
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!("Found {} symbols in document", doc_symbols.len()),
+            )
+            .await;
+
+        // Log all symbols with their ranges
+        for symbol in &doc_symbols {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "Symbol '{}' at {}:{}-{}:{}",
+                        symbol.name,
+                        symbol.range.start.line,
+                        symbol.range.start.character,
+                        symbol.range.end.line,
+                        symbol.range.end.character
+                    ),
+                )
+                .await;
+        }
+
         // Find the symbol at the requested position
         let symbol_at_position = doc_symbols
             .iter()
             .find(|symbol| self.position_in_range(position, symbol.range));
 
         if let Some(symbol) = symbol_at_position {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Found symbol '{}' at position", symbol.name),
+                )
+                .await;
             // Find all workspace references to this symbol
             let workspace_references = {
                 let workspace_symbols = self.workspace_symbols.read().await;
@@ -317,6 +357,9 @@ impl LanguageServer for Backend {
             }));
         }
 
+        self.client
+            .log_message(MessageType::WARNING, "No symbol found at position")
+            .await;
         Ok(None)
     }
 
@@ -463,102 +506,106 @@ impl Backend {
         // Create parser with configuration
         let parser = SystemVerilogParser::new(include_paths, defines);
 
-        match parser.parse_content(text) {
-            Ok(parsed_ast) => {
-                // Parse succeeded - extract symbols from AST
-                self.client
-                    .log_message(MessageType::INFO, "Parse succeeded!")
-                    .await;
+        // Use parse_content_recovery to get partial AST even with errors
+        let result = parser.parse_content_recovery(text);
 
-                symbols = self.extract_symbols_from_ast(&parsed_ast, text, uri);
-                ast = Some(parsed_ast);
-            }
-            Err(parse_error) => {
-                // Parse failed - convert each error to a diagnostic
-                self.client
-                    .log_message(MessageType::INFO, format!("Parse failed: {}", parse_error))
-                    .await;
+        // Extract symbols from AST (even if partial)
+        if let Some(parsed_ast) = &result.ast {
+            symbols = self.extract_symbols_from_ast(parsed_ast, text, uri);
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Extracted {} symbols from AST", symbols.len()),
+                )
+                .await;
+            ast = Some(parsed_ast.clone());
+        }
 
-                for error in &parse_error.errors {
-                    let range = if let Some(location) = &error.location {
-                        // Debug log the location info
-                        self.client
-                            .log_message(
-                                MessageType::INFO,
-                                format!(
-                                    "Error location: line={}, col={}, span={:?}",
-                                    location.line, location.column, location.span
-                                ),
-                            )
-                            .await;
+        // Process errors as diagnostics
+        if !result.errors.is_empty() {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Parse completed with {} errors", result.errors.len()),
+                )
+                .await;
 
-                        if let Some((start_char, end_char)) = location.span {
-                            // Use span positions to calculate precise range
-                            let start_pos = self
-                                .char_offset_to_position(text, start_char)
-                                .unwrap_or_else(|| {
-                                    Position::new(location.line as u32, location.column as u32)
-                                });
-                            let end_pos = self
-                                .char_offset_to_position(text, end_char)
+            for error in &result.errors {
+                let range = if let Some(location) = &error.location {
+                    // Debug log the location info
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!(
+                                "Error location: line={}, col={}, span={:?}",
+                                location.line, location.column, location.span
+                            ),
+                        )
+                        .await;
+
+                    if let Some((start_char, end_char)) = location.span {
+                        // Use span positions to calculate precise range
+                        let start_pos = self
+                            .char_offset_to_position(text, start_char)
+                            .unwrap_or_else(|| {
+                                Position::new(location.line as u32, location.column as u32)
+                            });
+                        let end_pos =
+                            self.char_offset_to_position(text, end_char)
                                 .unwrap_or_else(|| {
                                     Position::new(location.line as u32, location.column as u32 + 1)
                                 });
 
-                            Range::new(start_pos, end_pos)
-                        } else {
-                            // Use line/column directly
-                            let start_pos =
-                                Position::new(location.line as u32, location.column as u32);
-                            let end_pos =
-                                Position::new(location.line as u32, location.column as u32 + 1);
-
-                            Range::new(start_pos, end_pos)
-                        }
+                        Range::new(start_pos, end_pos)
                     } else {
-                        // Fallback to start of document
-                        self.client
-                            .log_message(MessageType::WARNING, "No location info for error")
-                            .await;
-                        Range::new(Position::new(0, 0), Position::new(0, 1))
-                    };
+                        // Use line/column directly
+                        let start_pos = Position::new(location.line as u32, location.column as u32);
+                        let end_pos =
+                            Position::new(location.line as u32, location.column as u32 + 1);
 
-                    let severity = match error.error_type {
-                        sv_parser::ParseErrorType::UnsupportedFeature(_) => {
-                            DiagnosticSeverity::WARNING
-                        }
-                        sv_parser::ParseErrorType::PreprocessorError => DiagnosticSeverity::ERROR,
-                        _ => DiagnosticSeverity::ERROR,
-                    };
-
-                    let mut diagnostic = Diagnostic {
-                        range,
-                        severity: Some(severity),
-                        code: None,
-                        code_description: None,
-                        source: Some("sv-parser".to_string()),
-                        message: error.message.clone(),
-                        related_information: None,
-                        tags: None,
-                        data: None,
-                    };
-
-                    // Add suggestions as related information if available
-                    if !error.suggestions.is_empty() {
-                        diagnostic.message = format!(
-                            "{}\n\nSuggestions:\n{}",
-                            error.message,
-                            error
-                                .suggestions
-                                .iter()
-                                .map(|s| format!("  • {}", s))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        );
+                        Range::new(start_pos, end_pos)
                     }
+                } else {
+                    // Fallback to start of document
+                    self.client
+                        .log_message(MessageType::WARNING, "No location info for error")
+                        .await;
+                    Range::new(Position::new(0, 0), Position::new(0, 1))
+                };
 
-                    diagnostics.push(diagnostic);
+                let severity = match error.error_type {
+                    sv_parser::ParseErrorType::UnsupportedFeature(_) => DiagnosticSeverity::WARNING,
+                    sv_parser::ParseErrorType::PreprocessorError => DiagnosticSeverity::ERROR,
+                    _ => DiagnosticSeverity::ERROR,
+                };
+
+                let mut diagnostic = Diagnostic {
+                    range,
+                    severity: Some(severity),
+                    code: None,
+                    code_description: None,
+                    source: Some("sv-parser".to_string()),
+                    message: error.message.clone(),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                };
+
+                // Add suggestions as related information if available
+                if !error.suggestions.is_empty() {
+                    diagnostic.message = format!(
+                        "{}\n\nSuggestions:\n{}",
+                        error.message,
+                        error
+                            .suggestions
+                            .iter()
+                            .map(|s| format!("  • {}", s))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
                 }
+
+                diagnostics.push(diagnostic);
             }
         }
 
@@ -582,6 +629,13 @@ impl Backend {
         Some(Position::new(line as u32, column as u32))
     }
 
+    // Helper function to convert a span to LSP Range
+    fn span_to_range(&self, text: &str, span: sv_parser::Span) -> Option<Range> {
+        let start_pos = self.char_offset_to_position(text, span.0)?;
+        let end_pos = self.char_offset_to_position(text, span.1)?;
+        Some(Range::new(start_pos, end_pos))
+    }
+
     // Extract symbols from AST recursively
     fn extract_symbols_from_ast(&self, ast: &SourceUnit, content: &str, uri: &Url) -> Vec<Symbol> {
         let mut symbols = Vec::new();
@@ -600,9 +654,15 @@ impl Backend {
         symbols: &mut Vec<Symbol>,
     ) {
         match item {
-            ModuleItem::ModuleDeclaration { name, ports, items } => {
-                // Add module name as a symbol
-                if let Some(range) = self.find_identifier_range(content, name) {
+            ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                ports,
+                items,
+                ..
+            } => {
+                // Add module name as a symbol using span from AST
+                if let Some(range) = self.span_to_range(content, *name_span) {
                     symbols.push(Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Module,
@@ -613,7 +673,7 @@ impl Backend {
 
                 // Add port names as symbols
                 for port in ports {
-                    if let Some(range) = self.find_identifier_range(content, &port.name) {
+                    if let Some(range) = self.span_to_range(content, port.name_span) {
                         symbols.push(Symbol {
                             name: port.name.clone(),
                             symbol_type: SymbolType::Port,
@@ -628,8 +688,10 @@ impl Backend {
                     self.extract_symbols_from_module_item(sub_item, content, uri, symbols);
                 }
             }
-            ModuleItem::PortDeclaration { name, .. } => {
-                if let Some(range) = self.find_identifier_range(content, name) {
+            ModuleItem::PortDeclaration {
+                name, name_span, ..
+            } => {
+                if let Some(range) = self.span_to_range(content, *name_span) {
                     symbols.push(Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Port,
@@ -640,11 +702,12 @@ impl Backend {
             }
             ModuleItem::VariableDeclaration {
                 name,
+                name_span,
                 initial_value,
                 ..
             } => {
-                // Add variable declaration
-                if let Some(range) = self.find_identifier_range(content, name) {
+                // Add variable declaration using span from AST
+                if let Some(range) = self.span_to_range(content, *name_span) {
                     symbols.push(Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Variable,
@@ -658,9 +721,14 @@ impl Backend {
                     self.extract_symbols_from_expression(expr, content, uri, symbols);
                 }
             }
-            ModuleItem::Assignment { target, expr } => {
-                // Add assignment target as variable
-                if let Some(range) = self.find_identifier_range(content, target) {
+            ModuleItem::Assignment {
+                target,
+                target_span,
+                expr,
+                ..
+            } => {
+                // Add assignment target as variable using span from AST
+                if let Some(range) = self.span_to_range(content, *target_span) {
                     symbols.push(Symbol {
                         name: target.clone(),
                         symbol_type: SymbolType::Variable,
@@ -691,8 +759,13 @@ impl Backend {
     ) {
         use sv_parser::Statement;
         match statement {
-            Statement::Assignment { target, expr } => {
-                if let Some(range) = self.find_identifier_range(content, target) {
+            Statement::Assignment {
+                target,
+                target_span,
+                expr,
+                ..
+            } => {
+                if let Some(range) = self.span_to_range(content, *target_span) {
                     symbols.push(Symbol {
                         name: target.clone(),
                         symbol_type: SymbolType::Variable,
@@ -719,8 +792,8 @@ impl Backend {
         symbols: &mut Vec<Symbol>,
     ) {
         match expr {
-            Expression::Identifier(name) => {
-                if let Some(range) = self.find_identifier_range(content, name) {
+            Expression::Identifier(name, span) => {
+                if let Some(range) = self.span_to_range(content, *span) {
                     symbols.push(Symbol {
                         name: name.clone(),
                         symbol_type: SymbolType::Variable,
@@ -736,22 +809,9 @@ impl Backend {
             Expression::Unary { operand, .. } => {
                 self.extract_symbols_from_expression(operand, content, uri, symbols);
             }
-            Expression::Number(_) => {
+            Expression::Number(_, _) => {
                 // Numbers are not identifiers we care about for renaming
             }
-        }
-    }
-
-    // Find the range of an identifier in the source text
-    fn find_identifier_range(&self, content: &str, identifier: &str) -> Option<Range> {
-        // Simple implementation: find first occurrence
-        // In a real implementation, you'd want to track locations during parsing
-        if let Some(start) = content.find(identifier) {
-            let start_pos = self.char_offset_to_position(content, start)?;
-            let end_pos = self.char_offset_to_position(content, start + identifier.len())?;
-            Some(Range::new(start_pos, end_pos))
-        } else {
-            None
         }
     }
 

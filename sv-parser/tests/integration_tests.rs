@@ -20,7 +20,10 @@ fn test_full_pipeline_simple_module() {
     let result = parser.parse_file(&file_path).unwrap();
 
     assert_eq!(result.items.len(), 1);
-    if let ModuleItem::ModuleDeclaration { name, ports, items } = &result.items[0] {
+    if let ModuleItem::ModuleDeclaration {
+        name, ports, items, ..
+    } = &result.items[0]
+    {
         assert_eq!(name, "simple");
         assert_eq!(ports.len(), 2);
         assert_eq!(items.len(), 1);

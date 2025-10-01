@@ -33,6 +33,56 @@ impl SystemVerilogParser {
         self.parse_content(&preprocessed_content)
     }
 
+    /// Parse with error recovery - returns partial AST even if there are errors
+    pub fn parse_content_recovery(&self, content: &str) -> crate::ParseResult {
+        let parser = self.source_unit_parser();
+
+        let (ast, chumsky_errors) = parser.parse_recovery(content);
+
+        let mut parse_errors = Vec::new();
+
+        // Process all errors from chumsky
+        for error in chumsky_errors {
+            let (message, error_type, suggestions, improved_span) =
+                self.convert_chumsky_error(&error, content);
+
+            // Use improved span if available, otherwise use chumsky's span
+            let final_span = improved_span.unwrap_or_else(|| error.span());
+            let location = self.span_to_location(final_span.clone(), content);
+
+            let mut single_error = SingleParseError::new(message, error_type);
+
+            if let Some(loc) = location {
+                single_error = single_error.with_location(loc);
+            }
+
+            if !suggestions.is_empty() {
+                single_error = single_error.with_suggestions(suggestions);
+            }
+
+            parse_errors.push(single_error);
+        }
+
+        // Sort errors by location for better presentation
+        parse_errors.sort_by(|a, b| match (&a.location, &b.location) {
+            (Some(loc_a), Some(loc_b)) => loc_a
+                .line
+                .cmp(&loc_b.line)
+                .then_with(|| loc_a.column.cmp(&loc_b.column)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+
+        // Try to find additional errors that the parser missed
+        self.find_additional_errors(content, &mut parse_errors);
+
+        crate::ParseResult {
+            ast,
+            errors: parse_errors,
+        }
+    }
+
     pub fn parse_content(&self, content: &str) -> Result<SourceUnit, ParseError> {
         let parser = self.source_unit_parser();
 
@@ -676,14 +726,21 @@ impl SystemVerilogParser {
             choice((one_of(" \t\r\n").repeated().at_least(1).ignored(), comment)).repeated();
 
         // Basic tokens
-        let identifier = filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
+        let identifier_inner = filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
             .then(filter(|c: &char| c.is_ascii_alphanumeric() || *c == '_').repeated())
             .map(|(first, rest): (char, Vec<char>)| {
                 let mut result = String::new();
                 result.push(first);
                 result.extend(rest);
                 result
-            })
+            });
+
+        let identifier = identifier_inner.clone().padded_by(whitespace.clone());
+
+        // Helper to get identifier with its span (before padding)
+        let identifier_with_span = identifier_inner
+            .clone()
+            .map_with_span(|name, span: std::ops::Range<usize>| (name, (span.start, span.end)))
             .padded_by(whitespace.clone());
 
         // Support both simple numbers and SystemVerilog sized numbers like 8'b1101z001
@@ -720,8 +777,16 @@ impl SystemVerilogParser {
         // Expression parser with unary and binary operators
         let expr = recursive(|expr| {
             let atom = choice((
-                identifier.clone().map(Expression::Identifier),
-                number.clone().map(Expression::Number),
+                identifier
+                    .clone()
+                    .map_with_span(|name, span: std::ops::Range<usize>| {
+                        Expression::Identifier(name, (span.start, span.end))
+                    }),
+                number
+                    .clone()
+                    .map_with_span(|num, span: std::ops::Range<usize>| {
+                        Expression::Number(num, (span.start, span.end))
+                    }),
                 expr.clone().delimited_by(just('('), just(')')),
             ))
             .padded_by(whitespace.clone());
@@ -743,13 +808,13 @@ impl SystemVerilogParser {
 
             // Factor handles unary operators and atoms
             let factor = choice((
-                unary_op
-                    .clone()
-                    .then(expr.clone())
-                    .map(|(op, operand)| Expression::Unary {
+                unary_op.clone().then(expr.clone()).map_with_span(
+                    |(op, operand), span: std::ops::Range<usize>| Expression::Unary {
                         op,
                         operand: Box::new(operand),
-                    }),
+                        span: (span.start, span.end),
+                    },
+                ),
                 atom.clone(),
             ))
             .padded_by(whitespace.clone());
@@ -779,10 +844,22 @@ impl SystemVerilogParser {
             factor
                 .clone()
                 .then(binary_op.then(factor).repeated())
-                .foldl(|left, (op, right)| Expression::Binary {
-                    op,
-                    left: Box::new(left),
-                    right: Box::new(right),
+                .foldl(|left, (op, right)| {
+                    // Calculate span from left to right
+                    let left_span = match &left {
+                        Expression::Identifier(_, s) | Expression::Number(_, s) => *s,
+                        Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
+                    };
+                    let right_span = match &right {
+                        Expression::Identifier(_, s) | Expression::Number(_, s) => *s,
+                        Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
+                    };
+                    Expression::Binary {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        span: (left_span.0, right_span.1),
+                    }
                 })
         });
 
@@ -815,40 +892,57 @@ impl SystemVerilogParser {
                 .clone()
                 .then(identifier.clone()) // type (wire, reg, etc.)
                 .then(range.clone().or_not())
-                .then(identifier.clone()) // name
-                .map(|(((direction, _type), range), name)| Port {
-                    name,
-                    direction: Some(direction),
-                    range,
-                }),
+                .then(identifier_with_span.clone()) // name
+                .map_with_span(
+                    |(((direction, _type), range), (name, name_span)),
+                     span: std::ops::Range<usize>| Port {
+                        name: name.clone(),
+                        name_span,
+                        direction: Some(direction),
+                        range,
+                        span: (span.start, span.end),
+                    },
+                ),
             // direction + range + identifier: input [3:0] clk
             port_direction
                 .clone()
                 .then(range.clone().or_not())
-                .then(identifier.clone()) // name
-                .map(|((direction, range), name)| Port {
-                    name,
-                    direction: Some(direction),
-                    range,
-                }),
+                .then(identifier_with_span.clone()) // name
+                .map_with_span(
+                    |((direction, range), (name, name_span)), span: std::ops::Range<usize>| Port {
+                        name: name.clone(),
+                        name_span,
+                        direction: Some(direction),
+                        range,
+                        span: (span.start, span.end),
+                    },
+                ),
             // just identifier: clk
-            identifier.clone().map(|name| Port {
-                name,
-                direction: None,
-                range: None,
-            }),
+            identifier_with_span.clone().map_with_span(
+                |(name, name_span), span: std::ops::Range<usize>| Port {
+                    name: name.clone(),
+                    name_span,
+                    direction: None,
+                    range: None,
+                    span: (span.start, span.end),
+                },
+            ),
         ));
 
         // Port declaration with error recovery
         let port_declaration = port_direction
             .then(identifier.clone()) // port type (like wire, reg)
-            .then(identifier.clone()) // port name
+            .then(identifier_with_span.clone()) // port name
             .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map(
-                |((direction, port_type), name)| ModuleItem::PortDeclaration {
-                    direction,
-                    port_type,
-                    name,
+            .map_with_span(
+                |((direction, port_type), (name, name_span)), span: std::ops::Range<usize>| {
+                    ModuleItem::PortDeclaration {
+                        direction,
+                        port_type,
+                        name: name.clone(),
+                        name_span,
+                        span: (span.start, span.end),
+                    }
                 },
             )
             .recover_with(skip_then_retry_until([';']))
@@ -857,11 +951,20 @@ impl SystemVerilogParser {
         // Assignment statement with error recovery
         let assignment = just("assign")
             .padded_by(whitespace.clone())
-            .ignore_then(identifier.clone())
+            .ignore_then(identifier_with_span.clone())
             .then_ignore(just('=').padded_by(whitespace.clone()))
             .then(expr.clone())
             .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map(|(target, expr)| ModuleItem::Assignment { target, expr })
+            .map_with_span(
+                |((target, target_span), expr), span: std::ops::Range<usize>| {
+                    ModuleItem::Assignment {
+                        target: target.clone(),
+                        target_span,
+                        expr,
+                        span: (span.start, span.end),
+                    }
+                },
+            )
             .recover_with(skip_then_retry_until([';']))
             .padded_by(whitespace.clone());
 
@@ -887,7 +990,7 @@ impl SystemVerilogParser {
         //   int count = 5;
         //   logic [3:0] addr = 4'b0000;
         //   logic a, b, c;  (multiple variables)
-        let single_var = identifier
+        let single_var = identifier_with_span
             .clone()
             .then(
                 just('=')
@@ -895,7 +998,7 @@ impl SystemVerilogParser {
                     .ignore_then(expr.clone())
                     .or_not(),
             )
-            .map(|(name, initial_value)| (name, initial_value));
+            .map(|((name, name_span), initial_value)| (name, name_span, initial_value));
 
         let variable_declaration = data_type
             .then(range.clone().or_not())
@@ -905,16 +1008,18 @@ impl SystemVerilogParser {
                     .at_least(1),
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map(|((data_type, range), vars)| {
+            .map_with_span(|((data_type, range), vars), span: std::ops::Range<usize>| {
                 // Create one VariableDeclaration for each variable in the list
                 // We'll return the first one and handle the rest differently
                 // For now, just return the first variable
-                let (name, initial_value) = vars.into_iter().next().unwrap();
+                let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
                 ModuleItem::VariableDeclaration {
                     data_type,
                     range,
-                    name,
+                    name: name.clone(),
+                    name_span,
                     initial_value,
+                    span: (span.start, span.end),
                 }
             })
             .recover_with(skip_then_retry_until([';']))
@@ -931,12 +1036,21 @@ impl SystemVerilogParser {
         // Statement parser for procedural blocks
         let statement = recursive(|_statement| {
             // Assignment statement (without 'assign' keyword)
-            let stmt_assignment = identifier
+            let stmt_assignment = identifier_with_span
                 .clone()
                 .then_ignore(just('=').padded_by(whitespace.clone()))
                 .then(expr.clone())
                 .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map(|(target, expr)| Statement::Assignment { target, expr })
+                .map_with_span(
+                    |((target, target_span), expr), span: std::ops::Range<usize>| {
+                        Statement::Assignment {
+                            target: target.clone(),
+                            target_span,
+                            expr,
+                            span: (span.start, span.end),
+                        }
+                    },
+                )
                 .padded_by(whitespace.clone());
 
             // System call like $display(...)
@@ -950,7 +1064,13 @@ impl SystemVerilogParser {
                         .map(|args| args.unwrap_or_default()),
                 )
                 .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map(|(name, args)| Statement::SystemCall { name, args })
+                .map_with_span(
+                    |(name, args), span: std::ops::Range<usize>| Statement::SystemCall {
+                        name,
+                        args,
+                        span: (span.start, span.end),
+                    },
+                )
                 .padded_by(whitespace.clone());
 
             choice((stmt_assignment, system_call))
@@ -983,9 +1103,12 @@ impl SystemVerilogParser {
                 just("begin").padded_by(whitespace.clone()),
                 just("end").padded_by(whitespace.clone()),
             ))
-            .map(|(block_type, statements)| ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
+            .map_with_span(|(block_type, statements), span: std::ops::Range<usize>| {
+                ModuleItem::ProceduralBlock {
+                    block_type,
+                    statements,
+                    span: (span.start, span.end),
+                }
             })
             .padded_by(whitespace.clone());
 
@@ -1005,12 +1128,22 @@ impl SystemVerilogParser {
         // Module declaration
         let module_declaration = just("module")
             .padded_by(whitespace.clone())
-            .ignore_then(identifier.clone())
+            .ignore_then(identifier_with_span.clone())
             .then(port_list)
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .then(module_body)
             .then_ignore(just("endmodule").padded_by(whitespace.clone()))
-            .map(|((name, ports), items)| ModuleItem::ModuleDeclaration { name, ports, items })
+            .map_with_span(
+                |(((name, name_span), ports), items), span: std::ops::Range<usize>| {
+                    ModuleItem::ModuleDeclaration {
+                        name: name.clone(),
+                        name_span,
+                        ports,
+                        items,
+                        span: (span.start, span.end),
+                    }
+                },
+            )
             .padded_by(whitespace.clone());
 
         // Top-level source unit

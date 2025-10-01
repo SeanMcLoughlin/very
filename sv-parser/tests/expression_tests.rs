@@ -45,14 +45,17 @@ fn test_binary_add_expression() {
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::Add));
-                if let Expression::Identifier(left_id) = left.as_ref() {
+                if let Expression::Identifier(left_id, _) = left.as_ref() {
                     assert_eq!(left_id, "a");
                 } else {
                     panic!("Expected identifier on left");
                 }
-                if let Expression::Identifier(right_id) = right.as_ref() {
+                if let Expression::Identifier(right_id, _) = right.as_ref() {
                     assert_eq!(right_id, "b");
                 } else {
                     panic!("Expected identifier on right");
@@ -76,14 +79,17 @@ fn test_number_expressions() {
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::Mul));
-                if let Expression::Number(left_num) = left.as_ref() {
+                if let Expression::Number(left_num, _) = left.as_ref() {
                     assert_eq!(left_num, "42");
                 } else {
                     panic!("Expected number on left");
                 }
-                if let Expression::Number(right_num) = right.as_ref() {
+                if let Expression::Number(right_num, _) = right.as_ref() {
                     assert_eq!(right_num, "3");
                 } else {
                     panic!("Expected number on right");
@@ -108,14 +114,17 @@ fn test_parentheses_precedence() {
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
             // Should parse as: (a + b) * c
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::Mul));
                 if let Expression::Binary { op: left_op, .. } = left.as_ref() {
                     assert!(matches!(left_op, BinaryOp::Add));
                 } else {
                     panic!("Expected binary expression on left");
                 }
-                if let Expression::Identifier(right_id) = right.as_ref() {
+                if let Expression::Identifier(right_id, _) = right.as_ref() {
                     assert_eq!(right_id, "c");
                 } else {
                     panic!("Expected identifier on right");
@@ -140,14 +149,17 @@ fn test_systemverilog_numbers() {
 
     if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
         if let ModuleItem::Assignment { expr, .. } = &items[0] {
-            if let Expression::Binary { op, left, right } = expr {
+            if let Expression::Binary {
+                op, left, right, ..
+            } = expr
+            {
                 assert!(matches!(op, BinaryOp::NotEqual));
-                if let Expression::Identifier(left_id) = left.as_ref() {
+                if let Expression::Identifier(left_id, _) = left.as_ref() {
                     assert_eq!(left_id, "a");
                 } else {
                     panic!("Expected identifier on left");
                 }
-                if let Expression::Number(right_num) = right.as_ref() {
+                if let Expression::Number(right_num, _) = right.as_ref() {
                     assert_eq!(right_num, "8'b1101z001");
                 } else {
                     panic!("Expected number on right");

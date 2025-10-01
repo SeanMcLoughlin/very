@@ -119,6 +119,15 @@ impl std::fmt::Display for SingleParseError {
 impl std::error::Error for ParseError {}
 
 #[derive(Debug, Clone)]
+pub struct ParseResult {
+    pub ast: Option<SourceUnit>,
+    pub errors: Vec<SingleParseError>,
+}
+
+/// Span represents a byte range in the source code (start, end)
+pub type Span = (usize, usize);
+
+#[derive(Debug, Clone)]
 pub struct SourceUnit {
     pub items: Vec<ModuleItem>,
 }
@@ -127,27 +136,36 @@ pub struct SourceUnit {
 pub enum ModuleItem {
     ModuleDeclaration {
         name: String,
+        name_span: Span,
         ports: Vec<Port>,
         items: Vec<ModuleItem>,
+        span: Span,
     },
     PortDeclaration {
         direction: PortDirection,
         port_type: String,
         name: String,
+        name_span: Span,
+        span: Span,
     },
     VariableDeclaration {
         data_type: String,
         range: Option<Range>,
         name: String,
+        name_span: Span,
         initial_value: Option<Expression>,
+        span: Span,
     },
     Assignment {
         target: String,
+        target_span: Span,
         expr: Expression,
+        span: Span,
     },
     ProceduralBlock {
         block_type: ProceduralBlockType,
         statements: Vec<Statement>,
+        span: Span,
     },
 }
 
@@ -162,8 +180,17 @@ pub enum ProceduralBlockType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Assignment { target: String, expr: Expression },
-    SystemCall { name: String, args: Vec<Expression> },
+    Assignment {
+        target: String,
+        target_span: Span,
+        expr: Expression,
+        span: Span,
+    },
+    SystemCall {
+        name: String,
+        args: Vec<Expression>,
+        span: Span,
+    },
     // Placeholder for other statement types
 }
 
@@ -177,8 +204,10 @@ pub enum PortDirection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {
     pub name: String,
+    pub name_span: Span,
     pub direction: Option<PortDirection>,
     pub range: Option<Range>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,16 +218,18 @@ pub struct Range {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
-    Identifier(String),
-    Number(String),
+    Identifier(String, Span),
+    Number(String, Span),
     Binary {
         op: BinaryOp,
         left: Box<Expression>,
         right: Box<Expression>,
+        span: Span,
     },
     Unary {
         op: UnaryOp,
         operand: Box<Expression>,
+        span: Span,
     },
 }
 
