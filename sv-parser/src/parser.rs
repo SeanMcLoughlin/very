@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    BinaryOp, Expression, ModuleItem, ParseError, ParseErrorType, Port, PortDirection, Range,
-    SingleParseError, SourceLocation, SourceUnit, UnaryOp,
+    BinaryOp, Expression, ModuleItem, ParseError, ParseErrorType, Port, PortDirection,
+    ProceduralBlockType, Range, SingleParseError, SourceLocation, SourceUnit, Statement, UnaryOp,
 };
 
 #[derive(Debug)]
@@ -886,21 +886,36 @@ impl SystemVerilogParser {
         //   wire [7:0] data;
         //   int count = 5;
         //   logic [3:0] addr = 4'b0000;
-        let variable_declaration = data_type
-            .then(range.clone().or_not())
-            .then(identifier.clone())
+        //   logic a, b, c;  (multiple variables)
+        let single_var = identifier
+            .clone()
             .then(
                 just('=')
                     .padded_by(whitespace.clone())
                     .ignore_then(expr.clone())
-                    .or_not()
+                    .or_not(),
+            )
+            .map(|(name, initial_value)| (name, initial_value));
+
+        let variable_declaration = data_type
+            .then(range.clone().or_not())
+            .then(
+                single_var
+                    .separated_by(just(',').padded_by(whitespace.clone()))
+                    .at_least(1),
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map(|(((data_type, range), name), initial_value)| ModuleItem::VariableDeclaration {
-                data_type,
-                range,
-                name,
-                initial_value,
+            .map(|((data_type, range), vars)| {
+                // Create one VariableDeclaration for each variable in the list
+                // We'll return the first one and handle the rest differently
+                // For now, just return the first variable
+                let (name, initial_value) = vars.into_iter().next().unwrap();
+                ModuleItem::VariableDeclaration {
+                    data_type,
+                    range,
+                    name,
+                    initial_value,
+                }
             })
             .recover_with(skip_then_retry_until([';']))
             .padded_by(whitespace.clone());
@@ -913,8 +928,74 @@ impl SystemVerilogParser {
             .map(|ports| ports.unwrap_or_default())
             .padded_by(whitespace.clone());
 
+        // Statement parser for procedural blocks
+        let statement = recursive(|_statement| {
+            // Assignment statement (without 'assign' keyword)
+            let stmt_assignment = identifier
+                .clone()
+                .then_ignore(just('=').padded_by(whitespace.clone()))
+                .then(expr.clone())
+                .then_ignore(just(';').padded_by(whitespace.clone()))
+                .map(|(target, expr)| Statement::Assignment { target, expr })
+                .padded_by(whitespace.clone());
+
+            // System call like $display(...)
+            let system_call = just('$')
+                .ignore_then(identifier.clone())
+                .then(
+                    expr.clone()
+                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .delimited_by(just('('), just(')'))
+                        .or_not()
+                        .map(|args| args.unwrap_or_default()),
+                )
+                .then_ignore(just(';').padded_by(whitespace.clone()))
+                .map(|(name, args)| Statement::SystemCall { name, args })
+                .padded_by(whitespace.clone());
+
+            choice((stmt_assignment, system_call))
+        });
+
+        // Procedural block type
+        let block_type = choice((
+            just("initial").to(ProceduralBlockType::Initial),
+            just("final").to(ProceduralBlockType::Final),
+            just("always_comb").to(ProceduralBlockType::AlwaysComb),
+            just("always_ff").to(ProceduralBlockType::AlwaysFF),
+            just("always").to(ProceduralBlockType::Always),
+        ))
+        .padded_by(whitespace.clone());
+
+        // Procedural block
+        let procedural_block = block_type
+            .then_ignore(
+                // Optional event control like @(posedge clk) or @(a)
+                just('@')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(
+                        just('(')
+                            .ignore_then(filter(|c| *c != ')').repeated())
+                            .then_ignore(just(')')),
+                    )
+                    .or_not(),
+            )
+            .then(statement.clone().repeated().delimited_by(
+                just("begin").padded_by(whitespace.clone()),
+                just("end").padded_by(whitespace.clone()),
+            ))
+            .map(|(block_type, statements)| ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+            })
+            .padded_by(whitespace.clone());
+
         // Module item
-        let module_item = choice((port_declaration, variable_declaration, assignment));
+        let module_item = choice((
+            port_declaration,
+            variable_declaration,
+            assignment,
+            procedural_block,
+        ));
 
         // Module body with error recovery - try to parse multiple statements
         let module_body = module_item

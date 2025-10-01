@@ -145,6 +145,26 @@ pub enum ModuleItem {
         target: String,
         expr: Expression,
     },
+    ProceduralBlock {
+        block_type: ProceduralBlockType,
+        statements: Vec<Statement>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProceduralBlockType {
+    Initial,
+    Final,
+    Always,
+    AlwaysComb,
+    AlwaysFF,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Statement {
+    Assignment { target: String, expr: Expression },
+    SystemCall { name: String, args: Vec<Expression> },
+    // Placeholder for other statement types
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

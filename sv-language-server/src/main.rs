@@ -638,7 +638,11 @@ impl Backend {
                     });
                 }
             }
-            ModuleItem::VariableDeclaration { name, initial_value, .. } => {
+            ModuleItem::VariableDeclaration {
+                name,
+                initial_value,
+                ..
+            } => {
                 // Add variable declaration
                 if let Some(range) = self.find_identifier_range(content, name) {
                     symbols.push(Symbol {
@@ -667,6 +671,41 @@ impl Backend {
 
                 // Extract identifiers from expression
                 self.extract_symbols_from_expression(expr, content, uri, symbols);
+            }
+            ModuleItem::ProceduralBlock { statements, .. } => {
+                // Extract symbols from statements in procedural block
+                for statement in statements {
+                    self.extract_symbols_from_statement(statement, content, uri, symbols);
+                }
+            }
+        }
+    }
+
+    // Extract symbols from statements
+    fn extract_symbols_from_statement(
+        &self,
+        statement: &sv_parser::Statement,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        use sv_parser::Statement;
+        match statement {
+            Statement::Assignment { target, expr } => {
+                if let Some(range) = self.find_identifier_range(content, target) {
+                    symbols.push(Symbol {
+                        name: target.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                self.extract_symbols_from_expression(expr, content, uri, symbols);
+            }
+            Statement::SystemCall { args, .. } => {
+                for arg in args {
+                    self.extract_symbols_from_expression(arg, content, uri, symbols);
+                }
             }
         }
     }
@@ -900,6 +939,10 @@ impl Backend {
             }
             ModuleItem::PortDeclaration { .. } => {
                 // Port declarations usually don't need folding
+            }
+            ModuleItem::ProceduralBlock { .. } => {
+                // Procedural blocks could support folding, but we'd need to track begin/end positions
+                // TODO: Add folding range support for procedural blocks
             }
         }
     }
