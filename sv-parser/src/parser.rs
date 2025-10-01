@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    BinaryOp, Expression, ModuleItem, ParseError, ParseErrorType, Port, PortDirection,
-    ProceduralBlockType, Range, SingleParseError, SourceLocation, SourceUnit, Statement, UnaryOp,
+    AssignmentOp, BinaryOp, Expression, ModuleItem, ParseError, ParseErrorType, Port,
+    PortDirection, ProceduralBlockType, Range, SingleParseError, SourceLocation, SourceUnit,
+    Statement, UnaryOp,
 };
 
 #[derive(Debug)]
@@ -1230,17 +1231,36 @@ impl SystemVerilogParser {
 
         // Statement parser for procedural blocks
         let statement = recursive(|_statement| {
+            // Assignment operators
+            let assignment_op = choice((
+                just(">>>=").to(AssignmentOp::AShrAssign),
+                just("<<<=").to(AssignmentOp::AShlAssign),
+                just(">>=").to(AssignmentOp::ShrAssign),
+                just("<<=").to(AssignmentOp::ShlAssign),
+                just("+=").to(AssignmentOp::AddAssign),
+                just("-=").to(AssignmentOp::SubAssign),
+                just("*=").to(AssignmentOp::MulAssign),
+                just("/=").to(AssignmentOp::DivAssign),
+                just("%=").to(AssignmentOp::ModAssign),
+                just("&=").to(AssignmentOp::AndAssign),
+                just("|=").to(AssignmentOp::OrAssign),
+                just("^=").to(AssignmentOp::XorAssign),
+                just("=").to(AssignmentOp::Assign),
+            ))
+            .padded_by(whitespace.clone());
+
             // Assignment statement (without 'assign' keyword)
             let stmt_assignment = identifier_with_span
                 .clone()
-                .then_ignore(just('=').padded_by(whitespace.clone()))
+                .then(assignment_op)
                 .then(expr.clone())
                 .then_ignore(just(';').padded_by(whitespace.clone()))
                 .map_with_span(
-                    |((target, target_span), expr), span: std::ops::Range<usize>| {
+                    |(((target, target_span), op), expr), span: std::ops::Range<usize>| {
                         Statement::Assignment {
                             target: target.clone(),
                             target_span,
+                            op,
                             expr,
                             span: (span.start, span.end),
                         }

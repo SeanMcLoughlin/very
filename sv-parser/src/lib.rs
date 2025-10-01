@@ -191,11 +191,29 @@ pub enum ProceduralBlockType {
     AlwaysFF,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssignmentOp {
+    Assign,     // =
+    AddAssign,  // +=
+    SubAssign,  // -=
+    MulAssign,  // *=
+    DivAssign,  // /=
+    ModAssign,  // %=
+    AndAssign,  // &=
+    OrAssign,   // |=
+    XorAssign,  // ^=
+    ShlAssign,  // <<=
+    ShrAssign,  // >>=
+    AShlAssign, // <<<=
+    AShrAssign, // >>>=
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Assignment {
         target: String,
         target_span: Span,
+        op: AssignmentOp,
         expr: Expression,
         span: Span,
     },

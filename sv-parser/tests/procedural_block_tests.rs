@@ -137,3 +137,30 @@ endmodule
         result.err()
     );
 }
+
+#[test]
+fn test_compound_assignment_operators() {
+    use std::path::Path;
+
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/assignments");
+
+    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
+            let filename = path.file_name().unwrap().to_str().unwrap();
+            println!("Testing assignment file: {}", filename);
+
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
+
+            parser
+                .parse_content(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
+
+            println!("  ✅ Parsed successfully");
+        }
+    }
+}
