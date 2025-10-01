@@ -6,8 +6,8 @@ use crate::{ParseError, ParseErrorType, SingleParseError, SourceLocation};
 
 #[derive(Debug, Clone)]
 pub struct Preprocessor {
-    include_dirs: Vec<PathBuf>,
-    defines: HashMap<String, String>,
+    pub include_dirs: Vec<PathBuf>,
+    pub defines: HashMap<String, String>,
 }
 
 impl Preprocessor {

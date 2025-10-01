@@ -57,6 +57,8 @@ enum SymbolType {
     Module,
     Variable,
     Port,
+    Define,
+    Include,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +344,9 @@ impl LanguageServer for Backend {
                     (SymbolType::Module, SymbolType::Module) => true,
                     (SymbolType::Variable, _) | (SymbolType::Port, _) => true,
                     (_, SymbolType::Variable) | (_, SymbolType::Port) => true,
+                    (SymbolType::Define, SymbolType::Define) => true,
+                    (SymbolType::Include, SymbolType::Include) => true,
+                    _ => false,
                 };
 
                 if should_rename {
@@ -414,20 +419,97 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "goto_definition called at {}:{}",
+                    position.line, position.character
+                ),
+            )
+            .await;
+
         // Find the symbol at the cursor position
-        let symbol_name = {
+        let symbol_info = {
             let docs = self.documents.read().await;
             match docs.get(&uri) {
-                Some(doc_state) => doc_state
-                    .symbols
-                    .iter()
-                    .find(|symbol| self.position_in_range(position, symbol.range))
-                    .map(|s| s.name.clone()),
-                None => None,
+                Some(doc_state) => {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Document has {} symbols", doc_state.symbols.len()),
+                        )
+                        .await;
+
+                    let found_symbol = doc_state
+                        .symbols
+                        .iter()
+                        .find(|symbol| self.position_in_range(position, symbol.range))
+                        .map(|s| (s.name.clone(), s.symbol_type.clone()));
+
+                    if let Some((ref name, ref stype)) = found_symbol {
+                        self.client
+                            .log_message(
+                                MessageType::INFO,
+                                format!("Found symbol: name='{}', type={:?}", name, stype),
+                            )
+                            .await;
+                    } else {
+                        self.client
+                            .log_message(MessageType::INFO, "No symbol found at position")
+                            .await;
+                    }
+
+                    found_symbol
+                }
+                None => {
+                    self.client
+                        .log_message(MessageType::WARNING, "Document not found")
+                        .await;
+                    None
+                }
             }
         };
 
-        if let Some(name) = symbol_name {
+        if let Some((name, symbol_type)) = symbol_info {
+            // Special handling for include directives
+            if matches!(symbol_type, SymbolType::Include) {
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("Processing include: path='{}'", name),
+                    )
+                    .await;
+
+                // The name is the resolved path for includes
+                if let Ok(file_uri) = Url::from_file_path(&name) {
+                    self.client
+                        .log_message(MessageType::INFO, format!("Navigating to: {}", file_uri))
+                        .await;
+
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: file_uri,
+                        range: Range {
+                            start: Position {
+                                line: 0,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: 0,
+                                character: 0,
+                            },
+                        },
+                    })));
+                } else {
+                    self.client
+                        .log_message(
+                            MessageType::ERROR,
+                            format!("Failed to create file URI from: {}", name),
+                        )
+                        .await;
+                }
+            }
+
             // Look up all occurrences of this symbol
             let workspace_symbols = self.workspace_symbols.read().await;
             if let Some(symbol_list) = workspace_symbols.get(&name) {
@@ -944,6 +1026,41 @@ impl Backend {
                     self.extract_symbols_from_statement(statement, content, uri, symbols);
                 }
             }
+            ModuleItem::DefineDirective {
+                name, name_span, ..
+            } => {
+                // Add define directive as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Define,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            ModuleItem::IncludeDirective {
+                path,
+                path_span,
+                resolved_path,
+                ..
+            } => {
+                // Add include directive as a symbol
+                if let Some(range) = self.span_to_range(content, *path_span) {
+                    let symbol_name = resolved_path
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or(path)
+                        .to_string();
+
+                    symbols.push(Symbol {
+                        name: symbol_name,
+                        symbol_type: SymbolType::Include,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -1006,6 +1123,26 @@ impl Backend {
             }
             Expression::Unary { operand, .. } => {
                 self.extract_symbols_from_expression(operand, content, uri, symbols);
+            }
+            Expression::MacroUsage {
+                name,
+                name_span,
+                arguments,
+                ..
+            } => {
+                // Add macro usage as a symbol reference
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Define,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from macro arguments
+                for arg in arguments {
+                    self.extract_symbols_from_expression(arg, content, uri, symbols);
+                }
             }
             Expression::Number(_, _) | Expression::StringLiteral(_, _) => {
                 // Numbers and string literals are not identifiers we care about for renaming
@@ -1201,6 +1338,12 @@ impl Backend {
             ModuleItem::ProceduralBlock { .. } => {
                 // Procedural blocks could support folding, but we'd need to track begin/end positions
                 // TODO: Add folding range support for procedural blocks
+            }
+            ModuleItem::DefineDirective { .. } => {
+                // Define directives are typically single-line, no folding needed
+            }
+            ModuleItem::IncludeDirective { .. } => {
+                // Include directives are single-line, no folding needed
             }
         }
     }

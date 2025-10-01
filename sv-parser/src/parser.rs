@@ -36,11 +36,160 @@ impl SystemVerilogParser {
     }
 
     pub fn parse_file(&mut self, file_path: &Path) -> Result<SourceUnit, ParseError> {
-        // First preprocess the file
-        let preprocessed_content = self.preprocessor.preprocess_file(file_path)?;
+        // Read the raw file content
+        let raw_content = std::fs::read_to_string(file_path).map_err(|e| {
+            ParseError::new(SingleParseError::new(
+                format!("Failed to read file {}: {}", file_path.display(), e),
+                ParseErrorType::PreprocessorError,
+            ))
+        })?;
 
-        // Then parse the preprocessed content
-        self.parse_content(&preprocessed_content)
+        // Parse the raw content (to capture preprocessor directives in AST)
+        let mut ast = self.parse_content(&raw_content)?;
+
+        // Resolve include paths in the AST
+        self.resolve_includes_in_ast(&mut ast, file_path)?;
+
+        Ok(ast)
+    }
+
+    /// Resolve all include directive paths in the AST
+    fn resolve_includes_in_ast(
+        &self,
+        ast: &mut SourceUnit,
+        current_file: &Path,
+    ) -> Result<(), ParseError> {
+        for item in &mut ast.items {
+            self.resolve_includes_in_item(item, current_file)?;
+        }
+        Ok(())
+    }
+
+    /// Recursively resolve includes in a module item
+    fn resolve_includes_in_item(
+        &self,
+        item: &mut ModuleItem,
+        current_file: &Path,
+    ) -> Result<(), ParseError> {
+        match item {
+            ModuleItem::IncludeDirective {
+                path,
+                resolved_path,
+                ..
+            } => {
+                // Resolve the include path
+                *resolved_path = Some(self.resolve_include_path(path, current_file)?);
+            }
+            ModuleItem::ModuleDeclaration { items, .. } => {
+                // Recursively resolve includes in module body
+                for sub_item in items {
+                    self.resolve_includes_in_item(sub_item, current_file)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Resolve an include path relative to the current file and include directories
+    fn resolve_include_path(
+        &self,
+        filename: &str,
+        current_file: &Path,
+    ) -> Result<PathBuf, ParseError> {
+        // Try to find the file in include directories
+        let mut found_path = None;
+
+        // First try relative to current file
+        if let Some(parent) = current_file.parent() {
+            let candidate = parent.join(filename);
+            if candidate.exists() {
+                found_path = Some(candidate);
+            }
+        }
+
+        // Then try include directories from preprocessor
+        if found_path.is_none() {
+            for inc_dir in &self.preprocessor.include_dirs {
+                let candidate = inc_dir.join(filename);
+                if candidate.exists() {
+                    found_path = Some(candidate);
+                    break;
+                }
+            }
+        }
+
+        found_path.ok_or_else(|| {
+            ParseError::new(
+                SingleParseError::new(
+                    format!("Include file '{}' not found", filename),
+                    ParseErrorType::PreprocessorError,
+                )
+                .with_suggestion(format!(
+                    "Check if '{}' exists in include directories",
+                    filename
+                )),
+            )
+        })
+    }
+
+    /// Parse a file and recursively parse all included files, merging them into a single AST
+    /// This is useful for building a complete project AST
+    pub fn parse_file_with_includes(&mut self, file_path: &Path) -> Result<SourceUnit, ParseError> {
+        let mut visited = std::collections::HashSet::new();
+        self.parse_file_recursive(file_path, &mut visited)
+    }
+
+    /// Recursively parse a file and its includes
+    fn parse_file_recursive(
+        &mut self,
+        file_path: &Path,
+        visited: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<SourceUnit, ParseError> {
+        // Canonicalize the path to handle relative paths and symlinks
+        let canonical_path = file_path.canonicalize().map_err(|e| {
+            ParseError::new(SingleParseError::new(
+                format!("Failed to canonicalize path {}: {}", file_path.display(), e),
+                ParseErrorType::PreprocessorError,
+            ))
+        })?;
+
+        // Check for circular includes
+        if visited.contains(&canonical_path) {
+            return Ok(SourceUnit { items: vec![] }); // Skip circular includes silently
+        }
+        visited.insert(canonical_path.clone());
+
+        // Parse the file normally
+        let mut ast = self.parse_file(file_path)?;
+
+        // Process all include directives
+        let mut expanded_items = Vec::new();
+        for item in ast.items {
+            match item {
+                ModuleItem::IncludeDirective { resolved_path, .. } => {
+                    // Parse the included file recursively
+                    if let Some(ref include_path) = resolved_path {
+                        match self.parse_file_recursive(include_path, visited) {
+                            Ok(included_ast) => {
+                                // Add all items from the included file
+                                expanded_items.extend(included_ast.items);
+                            }
+                            Err(_) => {
+                                // If we can't parse an included file, skip it but continue
+                                // This allows partial parsing of projects
+                            }
+                        }
+                    }
+                }
+                other => {
+                    expanded_items.push(other);
+                }
+            }
+        }
+
+        ast.items = expanded_items;
+        Ok(ast)
     }
 
     /// Parse with error recovery - returns partial AST even if there are errors
@@ -888,13 +1037,17 @@ impl SystemVerilogParser {
                         Expression::Identifier(_, s)
                         | Expression::Number(_, s)
                         | Expression::StringLiteral(_, s) => *s,
-                        Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
+                        Expression::Binary { span, .. }
+                        | Expression::Unary { span, .. }
+                        | Expression::MacroUsage { span, .. } => *span,
                     };
                     let right_span = match &right {
                         Expression::Identifier(_, s)
                         | Expression::Number(_, s)
                         | Expression::StringLiteral(_, s) => *s,
-                        Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
+                        Expression::Binary { span, .. }
+                        | Expression::Unary { span, .. }
+                        | Expression::MacroUsage { span, .. } => *span,
                     };
                     Expression::Binary {
                         op,
@@ -1154,8 +1307,71 @@ impl SystemVerilogParser {
             })
             .padded_by(whitespace.clone());
 
+        // Preprocessor directive parsers
+        let define_directive = just('`')
+            .ignore_then(just("define"))
+            .padded_by(whitespace.clone())
+            .ignore_then(identifier_with_span.clone())
+            .then(
+                // Optional parameter list
+                just('(')
+                    .ignore_then(
+                        identifier
+                            .clone()
+                            .separated_by(just(',').padded_by(whitespace.clone())),
+                    )
+                    .then_ignore(just(')'))
+                    .or_not()
+                    .padded_by(whitespace.clone()),
+            )
+            .then(
+                // Macro value - everything until end of line
+                filter(|c: &char| *c != '\n').repeated().collect::<String>(),
+            )
+            .map_with_span(
+                |(((name, name_span), params), value), span: std::ops::Range<usize>| {
+                    ModuleItem::DefineDirective {
+                        name,
+                        name_span,
+                        parameters: params.unwrap_or_default(),
+                        value: value.trim().to_string(),
+                        span: (span.start, span.end),
+                    }
+                },
+            );
+
+        let include_directive = just('`')
+            .ignore_then(just("include"))
+            .padded_by(whitespace.clone())
+            .ignore_then(
+                // Parse "filename" or <filename>
+                choice((
+                    filter(|c: &char| *c != '\n' && *c != '"' && *c != '<' && *c != '>')
+                        .repeated()
+                        .collect::<String>()
+                        .delimited_by(just('"'), just('"')),
+                    filter(|c: &char| *c != '\n' && *c != '"' && *c != '<' && *c != '>')
+                        .repeated()
+                        .collect::<String>()
+                        .delimited_by(just('<'), just('>')),
+                ))
+                .map_with_span(|path: String, span: std::ops::Range<usize>| {
+                    (path, (span.start, span.end))
+                }),
+            )
+            .map_with_span(|(path, path_span), span: std::ops::Range<usize>| {
+                ModuleItem::IncludeDirective {
+                    path,
+                    path_span,
+                    resolved_path: None, // Will be resolved later
+                    span: (span.start, span.end),
+                }
+            });
+
         // Module item
         let module_item = choice((
+            define_directive.clone(),
+            include_directive.clone(),
             port_declaration,
             variable_declaration,
             assignment,
@@ -1188,8 +1404,15 @@ impl SystemVerilogParser {
             )
             .padded_by(whitespace.clone());
 
+        // Top-level items (modules and preprocessor directives)
+        let top_level_item = choice((
+            define_directive.clone(),
+            include_directive.clone(),
+            module_declaration,
+        ));
+
         // Top-level source unit
-        let source_unit = module_declaration
+        let source_unit = top_level_item
             .repeated()
             .then_ignore(end())
             .map(|items| SourceUnit { items })

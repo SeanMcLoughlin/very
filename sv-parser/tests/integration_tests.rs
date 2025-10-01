@@ -59,6 +59,7 @@ module test; endmodule
     let mut parser = SystemVerilogParser::new(vec![], HashMap::new());
     let result = parser.parse_file(&file_path);
 
+    // parse_file now resolves include paths, so missing includes will cause an error
     assert!(result.is_err());
     assert!(result
         .unwrap_err()

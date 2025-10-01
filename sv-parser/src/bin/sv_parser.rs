@@ -98,11 +98,7 @@ fn main() {
 
         // Create a new parser instance for each file
         let mut parser = if parsed_args.fail_fast {
-            SystemVerilogParser::with_config(
-                include_paths.clone(),
-                initial_macros.clone(),
-                true,
-            )
+            SystemVerilogParser::with_config(include_paths.clone(), initial_macros.clone(), true)
         } else {
             SystemVerilogParser::new(include_paths.clone(), initial_macros.clone())
         };

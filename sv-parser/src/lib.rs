@@ -167,6 +167,19 @@ pub enum ModuleItem {
         statements: Vec<Statement>,
         span: Span,
     },
+    DefineDirective {
+        name: String,
+        name_span: Span,
+        parameters: Vec<String>, // macro parameters (e.g., for `define FOO(a, b))
+        value: String,           // macro replacement text
+        span: Span,
+    },
+    IncludeDirective {
+        path: String, // the include path (with quotes or angle brackets)
+        path_span: Span,
+        resolved_path: Option<std::path::PathBuf>, // the resolved absolute path
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,6 +243,12 @@ pub enum Expression {
     Unary {
         op: UnaryOp,
         operand: Box<Expression>,
+        span: Span,
+    },
+    MacroUsage {
+        name: String,
+        name_span: Span,
+        arguments: Vec<Expression>, // arguments if it's a parameterized macro
         span: Span,
     },
 }
