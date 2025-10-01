@@ -269,6 +269,11 @@ pub enum Expression {
         arguments: Vec<Expression>, // arguments if it's a parameterized macro
         span: Span,
     },
+    SystemFunctionCall {
+        name: String,
+        arguments: Vec<Expression>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

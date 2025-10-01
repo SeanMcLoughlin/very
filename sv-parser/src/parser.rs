@@ -955,7 +955,27 @@ impl SystemVerilogParser {
 
         // Expression parser with unary and binary operators
         let expr = recursive(|expr| {
+            // System function call like $sin(4)
+            let system_function = just('$')
+                .ignore_then(identifier.clone())
+                .then(
+                    expr.clone()
+                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .delimited_by(just('('), just(')'))
+                        .or_not()
+                        .map(|args| args.unwrap_or_default()),
+                )
+                .map_with_span(|(name, arguments), span: std::ops::Range<usize>| {
+                    Expression::SystemFunctionCall {
+                        name,
+                        arguments,
+                        span: (span.start, span.end),
+                    }
+                })
+                .padded_by(whitespace.clone());
+
             let atom = choice((
+                system_function,
                 string_literal
                     .clone()
                     .map_with_span(|s, span: std::ops::Range<usize>| {
@@ -1040,7 +1060,8 @@ impl SystemVerilogParser {
                         | Expression::StringLiteral(_, s) => *s,
                         Expression::Binary { span, .. }
                         | Expression::Unary { span, .. }
-                        | Expression::MacroUsage { span, .. } => *span,
+                        | Expression::MacroUsage { span, .. }
+                        | Expression::SystemFunctionCall { span, .. } => *span,
                     };
                     let right_span = match &right {
                         Expression::Identifier(_, s)
@@ -1048,7 +1069,8 @@ impl SystemVerilogParser {
                         | Expression::StringLiteral(_, s) => *s,
                         Expression::Binary { span, .. }
                         | Expression::Unary { span, .. }
-                        | Expression::MacroUsage { span, .. } => *span,
+                        | Expression::MacroUsage { span, .. }
+                        | Expression::SystemFunctionCall { span, .. } => *span,
                     };
                     Expression::Binary {
                         op,
@@ -1314,10 +1336,15 @@ impl SystemVerilogParser {
                     )
                     .or_not(),
             )
-            .then(statement.clone().repeated().delimited_by(
-                just("begin").padded_by(whitespace.clone()),
-                just("end").padded_by(whitespace.clone()),
-            ))
+            .then(choice((
+                // Multiple statements with begin/end
+                statement.clone().repeated().delimited_by(
+                    just("begin").padded_by(whitespace.clone()),
+                    just("end").padded_by(whitespace.clone()),
+                ),
+                // Single statement without begin/end
+                statement.clone().map(|s| vec![s]),
+            )))
             .map_with_span(|(block_type, statements), span: std::ops::Range<usize>| {
                 ModuleItem::ProceduralBlock {
                     block_type,

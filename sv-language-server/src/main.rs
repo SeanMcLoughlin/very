@@ -1144,6 +1144,12 @@ impl Backend {
                     self.extract_symbols_from_expression(arg, content, uri, symbols);
                 }
             }
+            Expression::SystemFunctionCall { arguments, .. } => {
+                // Extract symbols from system function call arguments
+                for arg in arguments {
+                    self.extract_symbols_from_expression(arg, content, uri, symbols);
+                }
+            }
             Expression::Number(_, _) | Expression::StringLiteral(_, _) => {
                 // Numbers and string literals are not identifiers we care about for renaming
             }
