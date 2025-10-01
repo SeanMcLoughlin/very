@@ -865,6 +865,46 @@ impl SystemVerilogParser {
             .recover_with(skip_then_retry_until([';']))
             .padded_by(whitespace.clone());
 
+        // Data type keywords
+        let data_type = choice((
+            just("wire"),
+            just("logic"),
+            just("reg"),
+            just("int"),
+            just("bit"),
+            just("byte"),
+            just("shortint"),
+            just("longint"),
+            just("integer"),
+        ))
+        .map(|s: &str| s.to_string())
+        .padded_by(whitespace.clone());
+
+        // Variable declaration with optional range and initialization
+        // Examples:
+        //   wire a;
+        //   wire [7:0] data;
+        //   int count = 5;
+        //   logic [3:0] addr = 4'b0000;
+        let variable_declaration = data_type
+            .then(range.clone().or_not())
+            .then(identifier.clone())
+            .then(
+                just('=')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(expr.clone())
+                    .or_not()
+            )
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .map(|(((data_type, range), name), initial_value)| ModuleItem::VariableDeclaration {
+                data_type,
+                range,
+                name,
+                initial_value,
+            })
+            .recover_with(skip_then_retry_until([';']))
+            .padded_by(whitespace.clone());
+
         // Port list in module header
         let port_list = module_port
             .separated_by(just(',').padded_by(whitespace.clone()))
@@ -874,7 +914,7 @@ impl SystemVerilogParser {
             .padded_by(whitespace.clone());
 
         // Module item
-        let module_item = choice((port_declaration, assignment));
+        let module_item = choice((port_declaration, variable_declaration, assignment));
 
         // Module body with error recovery - try to parse multiple statements
         let module_body = module_item

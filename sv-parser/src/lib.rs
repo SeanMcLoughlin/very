@@ -135,6 +135,12 @@ pub enum ModuleItem {
         port_type: String,
         name: String,
     },
+    VariableDeclaration {
+        data_type: String,
+        range: Option<Range>,
+        name: String,
+        initial_value: Option<Expression>,
+    },
     Assignment {
         target: String,
         expr: Expression,

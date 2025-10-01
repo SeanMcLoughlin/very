@@ -638,6 +638,22 @@ impl Backend {
                     });
                 }
             }
+            ModuleItem::VariableDeclaration { name, initial_value, .. } => {
+                // Add variable declaration
+                if let Some(range) = self.find_identifier_range(content, name) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+
+                // Extract identifiers from initial value expression if present
+                if let Some(expr) = initial_value {
+                    self.extract_symbols_from_expression(expr, content, uri, symbols);
+                }
+            }
             ModuleItem::Assignment { target, expr } => {
                 // Add assignment target as variable
                 if let Some(range) = self.find_identifier_range(content, target) {
@@ -874,6 +890,9 @@ impl Backend {
                 for sub_item in items {
                     self.extract_folding_ranges_from_item(sub_item, content, ranges);
                 }
+            }
+            ModuleItem::VariableDeclaration { .. } => {
+                // Variable declarations typically don't need folding
             }
             ModuleItem::Assignment { .. } => {
                 // Assignments typically don't need folding unless they're complex
