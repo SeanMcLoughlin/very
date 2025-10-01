@@ -7,6 +7,10 @@ use sv_parser::{Expression, ModuleItem, SourceUnit, SystemVerilogParser};
 use tokio::io::{stdin, stdout};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result as LspResult;
+use tower_lsp::lsp_types::request::{
+    GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
+    GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
+};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -140,6 +144,11 @@ impl LanguageServer for Backend {
                 )),
                 rename_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                declaration_provider: Some(DeclarationCapability::Simple(true)),
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -396,6 +405,195 @@ impl LanguageServer for Backend {
         } else {
             Ok(None)
         }
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> LspResult<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Look up all occurrences of this symbol
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                // For definition, we want the first declaration (typically the module/variable declaration)
+                // We'll prioritize Module and Port symbols as definitions
+                let definition = symbol_list
+                    .iter()
+                    .find(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Port))
+                    .or_else(|| symbol_list.first());
+
+                if let Some(def_symbol) = definition {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def_symbol.uri.clone(),
+                        range: def_symbol.range,
+                    })));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_declaration(
+        &self,
+        params: GotoDeclarationParams,
+    ) -> LspResult<Option<GotoDeclarationResponse>> {
+        // For SystemVerilog, declaration is the same as definition
+        let def_params = GotoDefinitionParams {
+            text_document_position_params: params.text_document_position_params,
+            work_done_progress_params: params.work_done_progress_params,
+            partial_result_params: params.partial_result_params,
+        };
+
+        match self.goto_definition(def_params).await? {
+            Some(GotoDefinitionResponse::Scalar(loc)) => {
+                Ok(Some(GotoDeclarationResponse::Scalar(loc)))
+            }
+            Some(GotoDefinitionResponse::Array(locs)) => {
+                Ok(Some(GotoDeclarationResponse::Array(locs)))
+            }
+            Some(GotoDefinitionResponse::Link(links)) => {
+                Ok(Some(GotoDeclarationResponse::Link(links)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn goto_type_definition(
+        &self,
+        params: GotoTypeDefinitionParams,
+    ) -> LspResult<Option<GotoTypeDefinitionResponse>> {
+        // For SystemVerilog, we'll look for module type definitions
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Look for module definitions
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let type_def = symbol_list
+                    .iter()
+                    .find(|s| matches!(s.symbol_type, SymbolType::Module));
+
+                if let Some(def_symbol) = type_def {
+                    return Ok(Some(GotoTypeDefinitionResponse::Scalar(Location {
+                        uri: def_symbol.uri.clone(),
+                        range: def_symbol.range,
+                    })));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: GotoImplementationParams,
+    ) -> LspResult<Option<GotoImplementationResponse>> {
+        // For SystemVerilog, implementation is similar to definition
+        // We look for module instantiations
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Look for all module definitions with this name
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let implementations: Vec<Location> = symbol_list
+                    .iter()
+                    .filter(|s| matches!(s.symbol_type, SymbolType::Module))
+                    .map(|s| Location {
+                        uri: s.uri.clone(),
+                        range: s.range,
+                    })
+                    .collect();
+
+                if !implementations.is_empty() {
+                    return Ok(Some(GotoImplementationResponse::Array(implementations)));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> LspResult<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Get all references to this symbol from the workspace
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let references: Vec<Location> = symbol_list
+                    .iter()
+                    .map(|s| Location {
+                        uri: s.uri.clone(),
+                        range: s.range,
+                    })
+                    .collect();
+
+                return Ok(Some(references));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
