@@ -113,3 +113,27 @@ endmodule
         result.err()
     );
 }
+
+#[test]
+fn test_display_with_complex_format_string() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = "module top();
+wire [7:0] a = 8'b1101x001;
+wire [7:0] b = 8'b1101x001;
+wire c;
+assign a = 8'b1101x001;
+assign b = 8'b1101x001;
+assign c = a == b;
+final begin
+    $display(\":assert: ('%s' == '%d')\", \"x\", c);
+end
+endmodule
+";
+
+    let result = parser.parse_content(content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse display with complex format string: {:?}",
+        result.err()
+    );
+}

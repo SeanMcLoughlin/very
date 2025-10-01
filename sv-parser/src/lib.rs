@@ -220,6 +220,7 @@ pub struct Range {
 pub enum Expression {
     Identifier(String, Span),
     Number(String, Span),
+    StringLiteral(String, Span),
     Binary {
         op: BinaryOp,
         left: Box<Expression>,

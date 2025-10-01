@@ -774,9 +774,25 @@ impl SystemVerilogParser {
         ))
         .padded_by(whitespace.clone());
 
+        // String literal parser - handles escaped quotes
+        let string_literal = just('"')
+            .ignore_then(
+                filter(|c: &char| *c != '"' && *c != '\\')
+                    .or(just('\\').ignore_then(any()))
+                    .repeated()
+                    .collect::<String>(),
+            )
+            .then_ignore(just('"'))
+            .padded_by(whitespace.clone());
+
         // Expression parser with unary and binary operators
         let expr = recursive(|expr| {
             let atom = choice((
+                string_literal
+                    .clone()
+                    .map_with_span(|s, span: std::ops::Range<usize>| {
+                        Expression::StringLiteral(s, (span.start, span.end))
+                    }),
                 identifier
                     .clone()
                     .map_with_span(|name, span: std::ops::Range<usize>| {
@@ -847,11 +863,15 @@ impl SystemVerilogParser {
                 .foldl(|left, (op, right)| {
                     // Calculate span from left to right
                     let left_span = match &left {
-                        Expression::Identifier(_, s) | Expression::Number(_, s) => *s,
+                        Expression::Identifier(_, s)
+                        | Expression::Number(_, s)
+                        | Expression::StringLiteral(_, s) => *s,
                         Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
                     };
                     let right_span = match &right {
-                        Expression::Identifier(_, s) | Expression::Number(_, s) => *s,
+                        Expression::Identifier(_, s)
+                        | Expression::Number(_, s)
+                        | Expression::StringLiteral(_, s) => *s,
                         Expression::Binary { span, .. } | Expression::Unary { span, .. } => *span,
                     };
                     Expression::Binary {

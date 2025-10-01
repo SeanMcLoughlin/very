@@ -809,8 +809,8 @@ impl Backend {
             Expression::Unary { operand, .. } => {
                 self.extract_symbols_from_expression(operand, content, uri, symbols);
             }
-            Expression::Number(_, _) => {
-                // Numbers are not identifiers we care about for renaming
+            Expression::Number(_, _) | Expression::StringLiteral(_, _) => {
+                // Numbers and string literals are not identifiers we care about for renaming
             }
         }
     }
