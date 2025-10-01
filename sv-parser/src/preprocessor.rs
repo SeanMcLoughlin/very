@@ -38,11 +38,11 @@ impl Preprocessor {
         let lines: Vec<&str> = content.lines().collect();
 
         for (line_num, line) in lines.iter().enumerate() {
-            let line = line.trim();
+            let trimmed_line = line.trim();
 
-            if line.starts_with('`') {
+            if trimmed_line.starts_with('`') {
                 // Handle preprocessor directives
-                if let Some(directive) = line.strip_prefix('`') {
+                if let Some(directive) = trimmed_line.strip_prefix('`') {
                     if let Some(define_content) = directive.strip_prefix("define ") {
                         self.handle_define(define_content)?;
                         continue; // Don't add the define line to output

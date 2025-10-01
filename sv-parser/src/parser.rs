@@ -39,14 +39,14 @@ impl SystemVerilogParser {
         parser.parse(content).map_err(|chumsky_errors| {
             let mut parse_errors = Vec::new();
 
-            // Debug: Show how many errors chumsky found
-            // eprintln!("DEBUG: Chumsky found {} errors", chumsky_errors.len());
-
             // Process all errors from chumsky
             for error in chumsky_errors {
-                let location = self.span_to_location(error.span(), content);
-                let (message, error_type, suggestions) =
+                let (message, error_type, suggestions, improved_span) =
                     self.convert_chumsky_error(&error, content);
+
+                // Use improved span if available, otherwise use chumsky's span
+                let final_span = improved_span.unwrap_or_else(|| error.span());
+                let location = self.span_to_location(final_span.clone(), content);
 
                 let mut single_error = SingleParseError::new(message, error_type);
 
@@ -105,12 +105,29 @@ impl SystemVerilogParser {
                 });
 
                 if !has_error_on_line {
+                    // Extract the token from the error message to find its position
+                    // Message format: "Invalid statement 'TOKEN', expected..."
+                    let token = error_info.message.split('\'').nth(1).unwrap_or("");
+
+                    // Find the token position in the original line
+                    let token_offset_in_line = line.find(token).unwrap_or(0);
+
+                    // Calculate character offset in the entire content
+                    let line_start: usize = lines
+                        .iter()
+                        .take(line_idx)
+                        .map(|l| l.len() + 1) // +1 for newline
+                        .sum();
+
+                    let token_start = line_start + token_offset_in_line;
+                    let token_end = token_start + token.len();
+
                     let error =
                         SingleParseError::new(error_info.message, ParseErrorType::InvalidSyntax)
                             .with_location(SourceLocation {
                                 line: line_idx,
-                                column: 0,
-                                span: None,
+                                column: token_offset_in_line,
+                                span: Some((token_start, token_end)),
                             })
                             .with_suggestions(error_info.suggestions);
 
@@ -188,18 +205,21 @@ impl SystemVerilogParser {
         error_span: std::ops::Range<usize>,
         content: &str,
         _found: &str,
-    ) -> Option<(String, ParseErrorType, Vec<String>)> {
+    ) -> Option<(String, ParseErrorType, Vec<String>, std::ops::Range<usize>)> {
         // Get the line containing the error
         if error_span.start >= content.len() {
             return None;
         }
 
-        let prefix = &content[..error_span.start];
-        let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        // Find the actual start of the line (right after previous newline or start of file)
+        // We need to search backwards from error position to find the newline
+        let line_start = content[..error_span.start]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
 
-        // Find the end of the current line
-        let suffix = &content[error_span.start..];
-        let line_end = suffix
+        // Find the end of the current line (next newline or end of content)
+        let line_end = content[error_span.start..]
             .find('\n')
             .map(|i| error_span.start + i)
             .unwrap_or(content.len());
@@ -214,6 +234,13 @@ impl SystemVerilogParser {
                 .next()
                 .unwrap_or(trimmed_line);
 
+            // Find the actual position of the invalid token in the ORIGINAL line (not trimmed)
+            // We need to search in current_line, not trimmed_line
+            let token_offset_in_line = current_line.find(invalid_token).unwrap_or(0);
+            let token_start = line_start + token_offset_in_line;
+            let token_end = token_start + invalid_token.len();
+            let improved_span = token_start..token_end;
+
             return Some((
                 format!(
                     "Invalid statement '{}', expected valid SystemVerilog statement",
@@ -225,6 +252,7 @@ impl SystemVerilogParser {
                     "Use 'input', 'output', or 'inout' for port declarations".to_string(),
                     "Use 'always' or 'always_ff' for procedural blocks".to_string(),
                 ],
+                improved_span,
             ));
         }
 
@@ -430,7 +458,12 @@ impl SystemVerilogParser {
         &self,
         error: &Simple<char>,
         content: &str,
-    ) -> (String, ParseErrorType, Vec<String>) {
+    ) -> (
+        String,
+        ParseErrorType,
+        Vec<String>,
+        Option<std::ops::Range<usize>>,
+    ) {
         match error.reason() {
             chumsky::error::SimpleReason::Unexpected => {
                 let found = error
@@ -453,9 +486,10 @@ impl SystemVerilogParser {
                 format!("Unclosed delimiter '{}'", delimiter),
                 ParseErrorType::ExpectedToken(delimiter.to_string()),
                 vec![format!("Add closing '{}'", delimiter)],
+                None,
             ),
             chumsky::error::SimpleReason::Custom(msg) => {
-                (msg.clone(), ParseErrorType::InvalidSyntax, Vec::new())
+                (msg.clone(), ParseErrorType::InvalidSyntax, Vec::new(), None)
             }
         }
     }
@@ -466,15 +500,17 @@ impl SystemVerilogParser {
         expected: &[String],
         error_span: std::ops::Range<usize>,
         content: &str,
-    ) -> (String, ParseErrorType, Vec<String>) {
-        // Debug: Let's see what we're actually expecting
-        // eprintln!("DEBUG: found={}, expected={:?}", found, expected);
-
+    ) -> (
+        String,
+        ParseErrorType,
+        Vec<String>,
+        Option<std::ops::Range<usize>>,
+    ) {
         // First, try to detect if this is an invalid statement by looking at the context
-        if let Some(invalid_statement_error) =
+        if let Some((message, error_type, suggestions, improved_span)) =
             self.detect_invalid_statement(error_span, content, found)
         {
-            return invalid_statement_error;
+            return (message, error_type, suggestions, Some(improved_span));
         }
 
         // Special case: if we're expecting 'n' and found newline/end, it's likely missing "endmodule"
@@ -484,12 +520,14 @@ impl SystemVerilogParser {
                     "Missing 'endmodule' to close module declaration".to_string(),
                     ParseErrorType::ExpectedToken("endmodule".to_string()),
                     vec!["Add 'endmodule' to complete the module".to_string()],
+                    None,
                 );
             } else {
                 return (
                     format!("Expected 'endmodule', found unexpected character {}", found),
                     ParseErrorType::UnexpectedToken,
                     vec!["Replace with 'endmodule' to close the module".to_string()],
+                    None,
                 );
             }
         }
@@ -500,12 +538,14 @@ impl SystemVerilogParser {
                 "Missing semicolon at end of statement".to_string(),
                 ParseErrorType::ExpectedToken(";".to_string()),
                 vec!["Add ';' to complete the statement".to_string()],
+                None,
             );
         }
 
         // Check if we're expecting characters that form other keywords
         if self.expects_keyword_pattern(expected) {
-            return self.suggest_keyword_completion(found, expected);
+            let (msg, err_type, sugg) = self.suggest_keyword_completion(found, expected);
+            return (msg, err_type, sugg, None);
         }
 
         // Check for unexpected character when expecting specific tokens
@@ -531,6 +571,7 @@ impl SystemVerilogParser {
                     ),
                     ParseErrorType::UnexpectedToken,
                     suggestions,
+                    None,
                 );
             }
         }
@@ -542,7 +583,7 @@ impl SystemVerilogParser {
             format!("Unexpected {}", found)
         };
 
-        (message, ParseErrorType::UnexpectedToken, Vec::new())
+        (message, ParseErrorType::UnexpectedToken, Vec::new(), None)
     }
 
     fn expects_keyword_pattern(&self, expected: &[String]) -> bool {
