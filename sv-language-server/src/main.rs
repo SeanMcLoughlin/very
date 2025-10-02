@@ -1554,6 +1554,46 @@ impl Backend {
                 )
                 .await;
             ast = Some(parsed_ast.clone());
+
+            // Run semantic analysis
+            let semantic_errors = parser.analyze_semantics(parsed_ast);
+            if !semantic_errors.is_empty() {
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("Found {} semantic errors", semantic_errors.len()),
+                    )
+                    .await;
+
+                // Convert semantic errors to diagnostics
+                for error in semantic_errors {
+                    let range =
+                        if let Some(start_pos) = self.char_offset_to_position(text, error.span.0) {
+                            let end_pos = self
+                                .char_offset_to_position(text, error.span.1)
+                                .unwrap_or_else(|| {
+                                    Position::new(start_pos.line, start_pos.character + 1)
+                                });
+                            Range::new(start_pos, end_pos)
+                        } else {
+                            Range::new(Position::new(0, 0), Position::new(0, 1))
+                        };
+
+                    let diagnostic = Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("sv-semantic".to_string()),
+                        message: error.message,
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    };
+
+                    diagnostics.push(diagnostic);
+                }
+            }
         }
 
         // Process errors as diagnostics

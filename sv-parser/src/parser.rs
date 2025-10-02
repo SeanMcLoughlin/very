@@ -291,6 +291,13 @@ impl SystemVerilogParser {
         })
     }
 
+    /// Perform semantic analysis on a parsed AST
+    /// Returns a vector of semantic errors (empty if no errors found)
+    pub fn analyze_semantics(&self, ast: &SourceUnit) -> Vec<crate::semantic::SemanticError> {
+        let mut analyzer = crate::semantic::SemanticAnalyzer::new();
+        analyzer.analyze(ast)
+    }
+
     fn span_to_location(
         &self,
         span: std::ops::Range<usize>,

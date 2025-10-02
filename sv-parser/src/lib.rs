@@ -1,9 +1,11 @@
 pub mod cli;
 pub mod parser;
 pub mod preprocessor;
+pub mod semantic;
 
 pub use cli::{parse_vcs_style_args, ParsedArgs};
 pub use parser::SystemVerilogParser;
+pub use semantic::{SemanticAnalyzer, SemanticError, SemanticErrorType};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {

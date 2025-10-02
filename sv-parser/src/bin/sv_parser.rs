@@ -105,7 +105,23 @@ fn main() {
 
         match parser.parse_file(file_path) {
             Ok(ast) => {
-                if parsed_args.verbose {
+                // Perform semantic analysis
+                let semantic_errors = parser.analyze_semantics(&ast);
+
+                if !semantic_errors.is_empty() {
+                    // Report semantic errors
+                    eprintln!("Semantic errors in {}:", file_path.display());
+                    for error in &semantic_errors {
+                        eprintln!(
+                            "  Error at {}:{}: {}",
+                            error.span.0, error.span.1, error.message
+                        );
+                    }
+                    had_errors = true;
+                    if parsed_args.fail_fast {
+                        process::exit(1);
+                    }
+                } else if parsed_args.verbose {
                     println!("Successfully parsed {}", file_path.display());
                     println!("AST: {:#?}", ast);
                 } else {
