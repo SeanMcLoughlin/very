@@ -1779,6 +1779,12 @@ impl Backend {
                     return Some(hover);
                 }
             }
+            sv_parser::Statement::ExpressionStatement { expr, .. } => {
+                // Check if there's a system function call in the expression
+                if let Some(hover) = self.find_hover_in_expression(expr, content, position) {
+                    return Some(hover);
+                }
+            }
         }
         None
     }
@@ -2053,6 +2059,9 @@ impl Backend {
             Statement::CaseStatement { expr, .. } => {
                 self.extract_symbols_from_expression(expr, content, uri, symbols);
             }
+            Statement::ExpressionStatement { expr, .. } => {
+                self.extract_symbols_from_expression(expr, content, uri, symbols);
+            }
         }
     }
 
@@ -2130,6 +2139,18 @@ impl Backend {
                         range,
                         uri: uri.clone(),
                     });
+                }
+            }
+            Expression::FunctionCall {
+                function,
+                arguments,
+                ..
+            } => {
+                // Extract symbols from the function expression (identifier or member access)
+                self.extract_symbols_from_expression(function, content, uri, symbols);
+                // Extract symbols from function arguments
+                for arg in arguments {
+                    self.extract_symbols_from_expression(arg, content, uri, symbols);
                 }
             }
             Expression::Number(_, _) | Expression::StringLiteral(_, _) => {

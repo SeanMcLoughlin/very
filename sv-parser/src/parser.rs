@@ -677,7 +677,8 @@ impl SystemVerilogParser {
                         | Expression::MacroUsage { span, .. }
                         | Expression::SystemFunctionCall { span, .. }
                         | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. } => span.0,
+                        | Expression::MemberAccess { span, .. }
+                        | Expression::FunctionCall { span, .. } => span.0,
                     };
                     Expression::MemberAccess {
                         object: Box::new(object),
@@ -688,7 +689,29 @@ impl SystemVerilogParser {
                 })
                 .padded_by(whitespace.clone());
 
-            // Factor handles unary operators and member access
+            // Function call handles function/method calls (e.g., func() or obj.method())
+            let function_call = member_access
+                .clone()
+                .then(
+                    expr.clone()
+                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .delimited_by(just('('), just(')'))
+                        .or_not(),
+                )
+                .map_with_span(|(function, maybe_args), span: std::ops::Range<usize>| {
+                    if let Some(args) = maybe_args {
+                        Expression::FunctionCall {
+                            function: Box::new(function),
+                            arguments: args,
+                            span: (span.start, span.end),
+                        }
+                    } else {
+                        function
+                    }
+                })
+                .padded_by(whitespace.clone());
+
+            // Factor handles unary operators, member access, and function calls
             let factor = choice((
                 unary_op.clone().then(expr.clone()).map_with_span(
                     |(op, operand), span: std::ops::Range<usize>| Expression::Unary {
@@ -697,7 +720,7 @@ impl SystemVerilogParser {
                         span: (span.start, span.end),
                     },
                 ),
-                member_access,
+                function_call,
             ))
             .padded_by(whitespace.clone());
 
@@ -741,7 +764,8 @@ impl SystemVerilogParser {
                         | Expression::MacroUsage { span, .. }
                         | Expression::SystemFunctionCall { span, .. }
                         | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. } => *span,
+                        | Expression::MemberAccess { span, .. }
+                        | Expression::FunctionCall { span, .. } => *span,
                     };
                     let right_span = match &right {
                         Expression::Identifier(_, s)
@@ -752,7 +776,8 @@ impl SystemVerilogParser {
                         | Expression::MacroUsage { span, .. }
                         | Expression::SystemFunctionCall { span, .. }
                         | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. } => *span,
+                        | Expression::MemberAccess { span, .. }
+                        | Expression::FunctionCall { span, .. } => *span,
                     };
                     Expression::Binary {
                         op,
@@ -1110,7 +1135,19 @@ impl SystemVerilogParser {
                 )
                 .padded_by(whitespace.clone());
 
-            choice((case_stmt, stmt_assignment, system_call))
+            // Expression statement (for method calls, function calls, etc.)
+            let expr_stmt = expr
+                .clone()
+                .then_ignore(just(';').padded_by(whitespace.clone()))
+                .map_with_span(|expr, span: std::ops::Range<usize>| {
+                    Statement::ExpressionStatement {
+                        expr,
+                        span: (span.start, span.end),
+                    }
+                })
+                .padded_by(whitespace.clone());
+
+            choice((case_stmt, stmt_assignment, system_call, expr_stmt))
         });
 
         // Procedural block type

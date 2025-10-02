@@ -263,6 +263,10 @@ pub enum Statement {
         expr: Expression,
         span: Span,
     },
+    ExpressionStatement {
+        expr: Expression,
+        span: Span,
+    },
     // Placeholder for other statement types
 }
 
@@ -323,6 +327,11 @@ pub enum Expression {
         object: Box<Expression>,
         member: String,
         member_span: Span,
+        span: Span,
+    },
+    FunctionCall {
+        function: Box<Expression>, // Can be Identifier or MemberAccess
+        arguments: Vec<Expression>,
         span: Span,
     },
 }
