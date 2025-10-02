@@ -2085,6 +2085,23 @@ impl Backend {
                 // Extract symbols from the assertion statement
                 self.extract_symbols_from_statement(statement, content, uri, symbols);
             }
+            ModuleItem::GlobalClocking {
+                identifier,
+                identifier_span,
+                ..
+            } => {
+                // Add global clocking identifier as a symbol if present
+                if let (Some(name), Some(span)) = (identifier, identifier_span) {
+                    if let Some(range) = self.span_to_range(content, *span) {
+                        symbols.push(Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Variable, // Use Variable for now
+                            range,
+                            uri: uri.clone(),
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -2505,7 +2522,8 @@ impl Backend {
             | ModuleItem::PortDeclaration { .. }
             | ModuleItem::DefineDirective { .. }
             | ModuleItem::IncludeDirective { .. }
-            | ModuleItem::ConcurrentAssertion { .. } => {
+            | ModuleItem::ConcurrentAssertion { .. }
+            | ModuleItem::GlobalClocking { .. } => {
                 // These items typically don't need folding
             }
         }
@@ -2682,6 +2700,20 @@ impl Backend {
             ModuleItem::ConcurrentAssertion { span, .. } => {
                 if contains(*span) {
                     ranges.push(*span);
+                }
+            }
+            ModuleItem::GlobalClocking {
+                span,
+                identifier_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if let Some(id_span) = identifier_span {
+                    if contains(*id_span) {
+                        ranges.push(*id_span);
+                    }
                 }
             }
         }

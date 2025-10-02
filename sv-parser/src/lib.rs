@@ -195,6 +195,13 @@ pub enum ModuleItem {
         statement: Statement,
         span: Span,
     },
+    GlobalClocking {
+        identifier: Option<String>,
+        identifier_span: Option<Span>,
+        clocking_event: Expression, // The event expression like @(posedge clk)
+        end_label: Option<String>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

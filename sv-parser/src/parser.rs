@@ -1505,12 +1505,59 @@ impl SystemVerilogParser {
             )
             .padded_by(whitespace.clone());
 
+        // Event control (e.g., @(posedge clk) or @(clk1 or clk2))
+        // For now, we capture it as a placeholder expression
+        let event_control = just('@').padded_by(whitespace.clone()).ignore_then(
+            just('(')
+                .padded_by(whitespace.clone())
+                .ignore_then(
+                    // Parse nested parentheses correctly
+                    filter(|c| *c != ')' && *c != '(')
+                        .or(just('(')
+                            .then(filter(|c| *c != ')').repeated())
+                            .then(just(')'))
+                            .map(|_| ' '))
+                        .repeated()
+                        .collect::<String>()
+                        .map(|s| Expression::Identifier(format!("@({})", s.trim()), (0, 0))),
+                )
+                .then_ignore(just(')').padded_by(whitespace.clone())),
+        );
+
+        // Global clocking declaration
+        let global_clocking = text::keyword("global")
+            .padded_by(whitespace.clone())
+            .ignore_then(text::keyword("clocking").padded_by(whitespace.clone()))
+            .ignore_then(identifier_with_span.clone().or_not())
+            .then(event_control.clone())
+            .then_ignore(just(';').padded_by(whitespace.clone()))
+            .then_ignore(text::keyword("endclocking").padded_by(whitespace.clone()))
+            .then(
+                just(':')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(identifier.clone())
+                    .or_not(),
+            )
+            .map_with_span(
+                |((opt_id, event), end_label), span: std::ops::Range<usize>| {
+                    ModuleItem::GlobalClocking {
+                        identifier: opt_id.as_ref().map(|(id, _)| id.clone()),
+                        identifier_span: opt_id.as_ref().map(|(_, s)| *s),
+                        clocking_event: event,
+                        end_label,
+                        span: (span.start, span.end),
+                    }
+                },
+            )
+            .padded_by(whitespace.clone());
+
         // Module item - order matters! Put more specific parsers first
         // class_var_decl is last because it can match any two identifiers
         let module_item = choice((
             define_directive.clone(),
             include_directive.clone(),
             class_declaration.clone(),
+            global_clocking,
             concurrent_assertion,
             port_declaration,
             variable_declaration,
