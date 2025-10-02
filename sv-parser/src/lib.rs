@@ -257,6 +257,12 @@ pub enum Statement {
         args: Vec<Expression>,
         span: Span,
     },
+    CaseStatement {
+        modifier: Option<String>, // priority, unique, or unique0
+        case_type: String,        // case, casex, or casez
+        expr: Expression,
+        span: Span,
+    },
     // Placeholder for other statement types
 }
 

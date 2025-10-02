@@ -1773,6 +1773,12 @@ impl Backend {
                     return Some(hover);
                 }
             }
+            sv_parser::Statement::CaseStatement { expr, .. } => {
+                // Check if there's a system function call in the case expression
+                if let Some(hover) = self.find_hover_in_expression(expr, content, position) {
+                    return Some(hover);
+                }
+            }
         }
         None
     }
@@ -2043,6 +2049,9 @@ impl Backend {
                 for arg in args {
                     self.extract_symbols_from_expression(arg, content, uri, symbols);
                 }
+            }
+            Statement::CaseStatement { expr, .. } => {
+                self.extract_symbols_from_expression(expr, content, uri, symbols);
             }
         }
     }

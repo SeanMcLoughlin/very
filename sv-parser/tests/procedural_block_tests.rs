@@ -53,3 +53,93 @@ fn test_compound_assignment_operators() {
         }
     }
 }
+
+/// Test priority case statement
+#[test]
+fn test_priority_case() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/priority_case.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique case statement
+#[test]
+fn test_unique_case() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique_case.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique0 case statement
+#[test]
+fn test_unique0_case() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique0_case.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test priority casex statement
+#[test]
+fn test_priority_casex() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test_files/procedural_blocks/priority_casex.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique casex statement
+#[test]
+fn test_unique_casex() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique_casex.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique0 casex statement
+#[test]
+fn test_unique0_casex() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique0_casex.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test priority casez statement
+#[test]
+fn test_priority_casez() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test_files/procedural_blocks/priority_casez.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique casez statement
+#[test]
+fn test_unique_casez() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique_casez.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test unique0 casez statement
+#[test]
+fn test_unique0_casez() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/procedural_blocks/unique0_casez.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}

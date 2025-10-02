@@ -113,3 +113,113 @@ fn test_integer_signed() {
     let content = std::fs::read_to_string(&path).unwrap();
     parser.parse_content(&content).unwrap();
 }
+
+/// Test trireg net declaration
+#[test]
+fn test_net_trireg() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/trireg_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test uwire net declaration
+#[test]
+fn test_net_uwire() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/uwire_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test wand net declaration
+#[test]
+fn test_net_wand() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/wand_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test wor net declaration
+#[test]
+fn test_net_wor() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/wor_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test tri net declaration
+#[test]
+fn test_net_tri() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/tri_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test triand net declaration
+#[test]
+fn test_net_triand() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/triand_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test trior net declaration
+#[test]
+fn test_net_trior() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/trior_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test tri0 net declaration
+#[test]
+fn test_net_tri0() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/tri0_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test tri1 net declaration
+#[test]
+fn test_net_tri1() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/tri1_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test supply0 net declaration
+#[test]
+fn test_net_supply0() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/supply0_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test supply1 net declaration
+#[test]
+fn test_net_supply1() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/supply1_declaration.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}

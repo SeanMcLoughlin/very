@@ -873,10 +873,21 @@ impl SystemVerilogParser {
             text::keyword("shortint").to("shortint".to_string()),
             text::keyword("longint").to("longint".to_string()),
             text::keyword("integer").to("integer".to_string()),
+            text::keyword("supply0").to("supply0".to_string()),
+            text::keyword("supply1").to("supply1".to_string()),
+            text::keyword("trireg").to("trireg".to_string()),
+            text::keyword("triand").to("triand".to_string()),
+            text::keyword("trior").to("trior".to_string()),
             text::keyword("logic").to("logic".to_string()),
+            text::keyword("uwire").to("uwire".to_string()),
             text::keyword("wire").to("wire".to_string()),
+            text::keyword("wand").to("wand".to_string()),
             text::keyword("byte").to("byte".to_string()),
             text::keyword("time").to("time".to_string()),
+            text::keyword("tri0").to("tri0".to_string()),
+            text::keyword("tri1").to("tri1".to_string()),
+            text::keyword("wor").to("wor".to_string()),
+            text::keyword("tri").to("tri".to_string()),
             text::keyword("int").to("int".to_string()),
             text::keyword("bit").to("bit".to_string()),
             text::keyword("reg").to("reg".to_string()),
@@ -1056,7 +1067,50 @@ impl SystemVerilogParser {
                 )
                 .padded_by(whitespace.clone());
 
-            choice((stmt_assignment, system_call))
+            // Case statement modifiers
+            let case_modifier = choice((
+                text::keyword("unique0").to("unique0".to_string()),
+                text::keyword("unique").to("unique".to_string()),
+                text::keyword("priority").to("priority".to_string()),
+            ))
+            .padded_by(whitespace.clone())
+            .or_not();
+
+            // Case type (case, casex, casez)
+            let case_type = choice((
+                text::keyword("casez").to("casez".to_string()),
+                text::keyword("casex").to("casex".to_string()),
+                text::keyword("case").to("case".to_string()),
+            ))
+            .padded_by(whitespace.clone());
+
+            // Case statement
+            let case_stmt = case_modifier
+                .then(case_type)
+                .then(expr.clone().delimited_by(
+                    just('(').padded_by(whitespace.clone()),
+                    just(')').padded_by(whitespace.clone()),
+                ))
+                .then_ignore(
+                    // Case items - simplified parser that just skips to endcase
+                    filter(|c| *c != 'e')
+                        .repeated()
+                        .then(text::keyword("endcase"))
+                        .padded_by(whitespace.clone()),
+                )
+                .map_with_span(
+                    |((modifier, case_type), case_expr), span: std::ops::Range<usize>| {
+                        Statement::CaseStatement {
+                            modifier,
+                            case_type,
+                            expr: case_expr,
+                            span: (span.start, span.end),
+                        }
+                    },
+                )
+                .padded_by(whitespace.clone());
+
+            choice((case_stmt, stmt_assignment, system_call))
         });
 
         // Procedural block type
