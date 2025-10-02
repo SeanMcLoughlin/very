@@ -153,6 +153,7 @@ pub enum ModuleItem {
     VariableDeclaration {
         data_type: String,
         signing: Option<String>,
+        drive_strength: Option<DriveStrength>,
         range: Option<Range>,
         name: String,
         name_span: Span,
@@ -301,6 +302,12 @@ pub struct Port {
 pub struct Range {
     pub msb: String, // Most significant bit (e.g., "7" in [7:0])
     pub lsb: String, // Least significant bit (e.g., "0" in [7:0])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriveStrength {
+    pub strength0: String, // Strength for 0 value (e.g., "highz0", "strong0")
+    pub strength1: String, // Strength for 1 value (e.g., "strong1", "pull1")
 }
 
 #[derive(Debug, Clone, PartialEq)]

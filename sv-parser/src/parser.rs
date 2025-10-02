@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, Expression, ModuleItem, ParseError,
-    ParseErrorType, Port, PortDirection, ProceduralBlockType, Range, SingleParseError,
+    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, DriveStrength, Expression, ModuleItem,
+    ParseError, ParseErrorType, Port, PortDirection, ProceduralBlockType, Range, SingleParseError,
     SourceLocation, SourceUnit, Statement, UnaryOp,
 };
 
@@ -945,6 +945,51 @@ impl SystemVerilogParser {
         ))
         .padded_by(whitespace.clone());
 
+        // Drive strength parser
+        // Syntax: (strength0, strength1) or (strength1, strength0)
+        // strength1: supply1, strong1, pull1, weak1, highz1
+        // strength0: supply0, strong0, pull0, weak0, highz0
+        let strength0_keyword = choice((
+            text::keyword("supply0").to("supply0".to_string()),
+            text::keyword("strong0").to("strong0".to_string()),
+            text::keyword("highz0").to("highz0".to_string()),
+            text::keyword("pull0").to("pull0".to_string()),
+            text::keyword("weak0").to("weak0".to_string()),
+        ))
+        .padded_by(whitespace.clone());
+
+        let strength1_keyword = choice((
+            text::keyword("supply1").to("supply1".to_string()),
+            text::keyword("strong1").to("strong1".to_string()),
+            text::keyword("highz1").to("highz1".to_string()),
+            text::keyword("pull1").to("pull1".to_string()),
+            text::keyword("weak1").to("weak1".to_string()),
+        ))
+        .padded_by(whitespace.clone());
+
+        let drive_strength = just('(')
+            .padded_by(whitespace.clone())
+            .ignore_then(
+                // Try both orders: (strength0, strength1) or (strength1, strength0)
+                strength0_keyword
+                    .clone()
+                    .then_ignore(just(',').padded_by(whitespace.clone()))
+                    .then(strength1_keyword.clone())
+                    .map(|(s0, s1)| DriveStrength {
+                        strength0: s0,
+                        strength1: s1,
+                    })
+                    .or(strength1_keyword
+                        .clone()
+                        .then_ignore(just(',').padded_by(whitespace.clone()))
+                        .then(strength0_keyword.clone())
+                        .map(|(s1, s0)| DriveStrength {
+                            strength0: s0,
+                            strength1: s1,
+                        })),
+            )
+            .then_ignore(just(')').padded_by(whitespace.clone()));
+
         // Variable declaration with optional range and initialization
         // Examples:
         //   wire a;
@@ -987,6 +1032,7 @@ impl SystemVerilogParser {
         // Variable declaration with built-in types
         let builtin_var_decl = data_type
             .then(signing.clone().or_not())
+            .then(drive_strength.clone().or_not())
             .then(range.clone().or_not())
             .then(
                 single_var_not_signing
@@ -996,11 +1042,13 @@ impl SystemVerilogParser {
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(
-                |(((data_type, signing), range), vars), span: std::ops::Range<usize>| {
+                |((((data_type, signing), drive_strength), range), vars),
+                 span: std::ops::Range<usize>| {
                     let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
                     ModuleItem::VariableDeclaration {
                         data_type,
                         signing,
+                        drive_strength,
                         range,
                         name: name.clone(),
                         name_span,
@@ -1033,6 +1081,7 @@ impl SystemVerilogParser {
                     ModuleItem::VariableDeclaration {
                         data_type,
                         signing: None,
+                        drive_strength: None,
                         range: None,
                         name,
                         name_span,

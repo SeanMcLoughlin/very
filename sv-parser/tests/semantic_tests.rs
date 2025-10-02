@@ -3,7 +3,7 @@
 //! Tests for semantic validation that goes beyond syntax checking
 
 use std::collections::HashMap;
-use sv_parser::{SemanticAnalyzer, SemanticErrorType, SystemVerilogParser};
+use sv_parser::{SemanticErrorType, SystemVerilogParser};
 
 #[test]
 fn test_unknown_system_function() {
