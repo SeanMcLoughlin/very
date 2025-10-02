@@ -157,6 +157,7 @@ pub enum ModuleItem {
         range: Option<Range>,
         name: String,
         name_span: Span,
+        unpacked_dimensions: Vec<UnpackedDimension>,
         initial_value: Option<Expression>,
         span: Span,
     },
@@ -211,6 +212,7 @@ pub enum ClassItem {
         data_type: String,
         name: String,
         name_span: Span,
+        unpacked_dimensions: Vec<UnpackedDimension>,
         initial_value: Option<Expression>,
         span: Span,
     },
@@ -309,6 +311,17 @@ pub struct Port {
 pub struct Range {
     pub msb: String, // Most significant bit (e.g., "7" in [7:0])
     pub lsb: String, // Least significant bit (e.g., "0" in [7:0])
+}
+
+/// Represents an unpacked array dimension
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnpackedDimension {
+    /// Dynamic array dimension: []
+    Dynamic,
+    /// Fixed-size unpacked array dimension: [N]
+    FixedSize(String),
+    /// Range-based unpacked array: [msb:lsb]
+    Range(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

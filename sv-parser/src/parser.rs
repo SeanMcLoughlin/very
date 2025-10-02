@@ -6,7 +6,7 @@ use crate::preprocessor::Preprocessor;
 use crate::{
     AssignmentOp, BinaryOp, ClassItem, ClassQualifier, DriveStrength, Expression, ModuleItem,
     ParseError, ParseErrorType, Port, PortDirection, ProceduralBlockType, Range, SingleParseError,
-    SourceLocation, SourceUnit, Statement, UnaryOp,
+    SourceLocation, SourceUnit, Statement, UnaryOp, UnpackedDimension,
 };
 
 #[derive(Debug)]
@@ -823,6 +823,27 @@ impl SystemVerilogParser {
             .map(|(msb, lsb)| Range { msb, lsb })
             .padded_by(whitespace.clone());
 
+        // Unpacked dimension parser
+        // Parses: [] (dynamic), [N] (fixed size), or [msb:lsb] (range)
+        let unpacked_dimension = just('[')
+            .ignore_then(
+                choice((number.clone(), identifier.clone()))
+                    .then(
+                        just(':')
+                            .padded_by(whitespace.clone())
+                            .ignore_then(choice((number.clone(), identifier.clone())))
+                            .or_not(),
+                    )
+                    .or_not(),
+            )
+            .then_ignore(just(']'))
+            .map(|expr_opt| match expr_opt {
+                None => UnpackedDimension::Dynamic,
+                Some((msb, Some(lsb))) => UnpackedDimension::Range(msb, lsb),
+                Some((size, None)) => UnpackedDimension::FixedSize(size),
+            })
+            .padded_by(whitespace.clone());
+
         // Port in module header can be:
         // - just identifier: clk
         // - direction + identifier: input clk
@@ -1021,13 +1042,16 @@ impl SystemVerilogParser {
                     Ok((name, span))
                 }
             })
+            .then(unpacked_dimension.clone().repeated())
             .then(
                 just('=')
                     .padded_by(whitespace.clone())
                     .ignore_then(expr.clone())
                     .or_not(),
             )
-            .map(|((name, name_span), initial_value)| (name, name_span, initial_value));
+            .map(|(((name, name_span), unpacked_dims), initial_value)| {
+                (name, name_span, unpacked_dims, initial_value)
+            });
 
         // Variable declaration with built-in types
         let builtin_var_decl = data_type
@@ -1044,7 +1068,8 @@ impl SystemVerilogParser {
             .map_with_span(
                 |((((data_type, signing), drive_strength), range), vars),
                  span: std::ops::Range<usize>| {
-                    let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
+                    let (name, name_span, unpacked_dimensions, initial_value) =
+                        vars.into_iter().next().unwrap();
                     ModuleItem::VariableDeclaration {
                         data_type,
                         signing,
@@ -1052,6 +1077,7 @@ impl SystemVerilogParser {
                         range,
                         name: name.clone(),
                         name_span,
+                        unpacked_dimensions,
                         initial_value,
                         span: (span.start, span.end),
                     }
@@ -1069,6 +1095,7 @@ impl SystemVerilogParser {
         let class_var_decl = identifier
             .clone()
             .then(identifier_with_span.clone())
+            .then(unpacked_dimension.clone().repeated())
             .then(
                 just('=')
                     .padded_by(whitespace.clone())
@@ -1077,7 +1104,8 @@ impl SystemVerilogParser {
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(
-                |((data_type, (name, name_span)), initial_value), span: std::ops::Range<usize>| {
+                |(((data_type, (name, name_span)), unpacked_dimensions), initial_value),
+                 span: std::ops::Range<usize>| {
                     ModuleItem::VariableDeclaration {
                         data_type,
                         signing: None,
@@ -1085,6 +1113,7 @@ impl SystemVerilogParser {
                         range: None,
                         name,
                         name_span,
+                        unpacked_dimensions,
                         initial_value,
                         span: (span.start, span.end),
                     }
@@ -1382,6 +1411,7 @@ impl SystemVerilogParser {
             .or_not()
             .then(identifier.clone()) // data_type
             .then(identifier_with_span.clone()) // name
+            .then(unpacked_dimension.clone().repeated())
             .then(
                 just('=')
                     .padded_by(whitespace.clone())
@@ -1390,13 +1420,17 @@ impl SystemVerilogParser {
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(
-                |(((qualifier, data_type), (name, name_span)), initial_value),
+                |(
+                    (((qualifier, data_type), (name, name_span)), unpacked_dimensions),
+                    initial_value,
+                ),
                  span: std::ops::Range<usize>| {
                     ClassItem::Property {
                         qualifier,
                         data_type,
                         name,
                         name_span,
+                        unpacked_dimensions,
                         initial_value,
                         span: (span.start, span.end),
                     }

@@ -223,3 +223,32 @@ fn test_net_supply1() {
     let content = std::fs::read_to_string(&path).unwrap();
     parser.parse_content(&content).unwrap();
 }
+
+/// Test dynamic array basic declaration
+#[test]
+fn test_dynamic_array_basic() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/dynamic_array_basic.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test fixed size unpacked array declaration
+#[test]
+fn test_fixed_unpacked_array() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/fixed_unpacked_array.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test multidimensional array with dynamic dimension
+#[test]
+fn test_multidim_array() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/multidim_array.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
