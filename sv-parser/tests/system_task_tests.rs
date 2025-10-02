@@ -80,3 +80,71 @@ fn test_cos_function() {
         result.err()
     );
 }
+
+/// Test parsing $rose sampled value function
+#[test]
+fn test_rose_function() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/sampled_rose.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse $rose function: {:?}",
+        result.err()
+    );
+}
+
+/// Test parsing $fell sampled value function
+#[test]
+fn test_fell_function() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/sampled_fell.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse $fell function: {:?}",
+        result.err()
+    );
+}
+
+/// Test parsing $stable sampled value function
+#[test]
+fn test_stable_function() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/sampled_stable.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse $stable function: {:?}",
+        result.err()
+    );
+}
+
+/// Test parsing $past sampled value function
+#[test]
+fn test_past_function() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/sampled_past.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content);
+    assert!(
+        result.is_ok(),
+        "Failed to parse $past function: {:?}",
+        result.err()
+    );
+}

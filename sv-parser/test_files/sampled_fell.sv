@@ -1,0 +1,10 @@
+/*
+:name: fell_function
+:description: $fell test
+:tags: 20.13 16.9
+:type: simulation elaboration parsing
+*/
+module top();
+logic a, clk;
+assert property (@(posedge clk) $fell(a)) else $info;
+endmodule

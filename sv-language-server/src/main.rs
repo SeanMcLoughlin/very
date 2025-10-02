@@ -1785,6 +1785,25 @@ impl Backend {
                     return Some(hover);
                 }
             }
+            sv_parser::Statement::AssertProperty {
+                property_expr,
+                action_block,
+                ..
+            } => {
+                // Check if there's a system function call in the property expression
+                if let Some(hover) = self.find_hover_in_expression(property_expr, content, position)
+                {
+                    return Some(hover);
+                }
+                // Check action block if present
+                if let Some(action_stmt) = action_block {
+                    if let Some(hover) =
+                        self.find_hover_in_statement(action_stmt, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
         }
         None
     }
@@ -2022,6 +2041,10 @@ impl Backend {
                     self.extract_symbols_from_class_item(class_item, content, uri, symbols);
                 }
             }
+            ModuleItem::ConcurrentAssertion { statement, .. } => {
+                // Extract symbols from the assertion statement
+                self.extract_symbols_from_statement(statement, content, uri, symbols);
+            }
         }
     }
 
@@ -2061,6 +2084,16 @@ impl Backend {
             }
             Statement::ExpressionStatement { expr, .. } => {
                 self.extract_symbols_from_expression(expr, content, uri, symbols);
+            }
+            Statement::AssertProperty {
+                property_expr,
+                action_block,
+                ..
+            } => {
+                self.extract_symbols_from_expression(property_expr, content, uri, symbols);
+                if let Some(action_stmt) = action_block {
+                    self.extract_symbols_from_statement(action_stmt, content, uri, symbols);
+                }
             }
         }
     }
@@ -2431,7 +2464,8 @@ impl Backend {
             | ModuleItem::Assignment { .. }
             | ModuleItem::PortDeclaration { .. }
             | ModuleItem::DefineDirective { .. }
-            | ModuleItem::IncludeDirective { .. } => {
+            | ModuleItem::IncludeDirective { .. }
+            | ModuleItem::ConcurrentAssertion { .. } => {
                 // These items typically don't need folding
             }
         }
@@ -2603,6 +2637,11 @@ impl Backend {
                 }
                 if contains(*name_span) {
                     ranges.push(*name_span);
+                }
+            }
+            ModuleItem::ConcurrentAssertion { span, .. } => {
+                if contains(*span) {
+                    ranges.push(*span);
                 }
             }
         }

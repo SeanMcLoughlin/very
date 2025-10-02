@@ -1135,6 +1135,49 @@ impl SystemVerilogParser {
                 )
                 .padded_by(whitespace.clone());
 
+            // Assert property statement
+            let assert_property = text::keyword("assert")
+                .padded_by(whitespace.clone())
+                .ignore_then(text::keyword("property").padded_by(whitespace.clone()))
+                .ignore_then(expr.clone().delimited_by(
+                    just('(').padded_by(whitespace.clone()),
+                    just(')').padded_by(whitespace.clone()),
+                ))
+                .then(
+                    text::keyword("else")
+                        .padded_by(whitespace.clone())
+                        .ignore_then(
+                            just('$')
+                                .ignore_then(identifier.clone())
+                                .then(
+                                    expr.clone()
+                                        .separated_by(just(',').padded_by(whitespace.clone()))
+                                        .delimited_by(just('('), just(')'))
+                                        .or_not()
+                                        .map(|args| args.unwrap_or_default()),
+                                )
+                                .map_with_span(|(name, args), span: std::ops::Range<usize>| {
+                                    Statement::SystemCall {
+                                        name,
+                                        args,
+                                        span: (span.start, span.end),
+                                    }
+                                }),
+                        )
+                        .or_not(),
+                )
+                .then_ignore(just(';').padded_by(whitespace.clone()))
+                .map_with_span(
+                    |(property_expr, action_block), span: std::ops::Range<usize>| {
+                        Statement::AssertProperty {
+                            property_expr,
+                            action_block: action_block.map(Box::new),
+                            span: (span.start, span.end),
+                        }
+                    },
+                )
+                .padded_by(whitespace.clone());
+
             // Expression statement (for method calls, function calls, etc.)
             let expr_stmt = expr
                 .clone()
@@ -1147,7 +1190,13 @@ impl SystemVerilogParser {
                 })
                 .padded_by(whitespace.clone());
 
-            choice((case_stmt, stmt_assignment, system_call, expr_stmt))
+            choice((
+                assert_property,
+                case_stmt,
+                stmt_assignment,
+                system_call,
+                expr_stmt,
+            ))
         });
 
         // Procedural block type
@@ -1365,12 +1414,37 @@ impl SystemVerilogParser {
             )
             .padded_by(whitespace.clone());
 
+        // Concurrent assertion (module-level assert property)
+        // For now, just parse the structure without detailed validation
+        let concurrent_assertion = text::keyword("assert")
+            .padded_by(whitespace.clone())
+            .ignore_then(text::keyword("property").padded_by(whitespace.clone()))
+            .then_ignore(
+                filter(|c| *c != ';')
+                    .repeated()
+                    .then_ignore(just(';').padded_by(whitespace.clone())),
+            )
+            .map_with_span(
+                |_, span: std::ops::Range<usize>| ModuleItem::ConcurrentAssertion {
+                    statement: Statement::ExpressionStatement {
+                        expr: Expression::Identifier(
+                            "placeholder".to_string(),
+                            (span.start, span.end),
+                        ),
+                        span: (span.start, span.end),
+                    },
+                    span: (span.start, span.end),
+                },
+            )
+            .padded_by(whitespace.clone());
+
         // Module item - order matters! Put more specific parsers first
         // class_var_decl is last because it can match any two identifiers
         let module_item = choice((
             define_directive.clone(),
             include_directive.clone(),
             class_declaration.clone(),
+            concurrent_assertion,
             port_declaration,
             variable_declaration,
             assignment,

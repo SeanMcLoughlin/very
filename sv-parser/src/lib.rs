@@ -188,6 +188,10 @@ pub enum ModuleItem {
         items: Vec<ClassItem>,
         span: Span,
     },
+    ConcurrentAssertion {
+        statement: Statement,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +269,11 @@ pub enum Statement {
     },
     ExpressionStatement {
         expr: Expression,
+        span: Span,
+    },
+    AssertProperty {
+        property_expr: Expression,
+        action_block: Option<Box<Statement>>,
         span: Span,
     },
     // Placeholder for other statement types
