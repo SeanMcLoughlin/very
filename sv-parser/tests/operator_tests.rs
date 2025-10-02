@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use sv_parser::{BinaryOp, Expression, ModuleItem, SystemVerilogParser, UnaryOp};
+use sv_parser::{
+    BinaryOp, Expression, ModuleItem, ProceduralBlockType, Statement, SystemVerilogParser, UnaryOp,
+};
 
 /// Test parsing all operator test files
 #[test]
@@ -504,4 +506,257 @@ fn test_reduction_operators() {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::LogicalNot));
+}
+
+#[test]
+fn test_shift_operators() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+
+    // Test logical left shift (<<)
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_log_shl.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    // Find the initial block
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    // Get the first statement (the assignment)
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment, got {:?}", first_stmt);
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::LogicalShiftLeft));
+
+    // Test logical right shift (>>)
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_log_shr.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment");
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::LogicalShiftRight));
+
+    // Test arithmetic left shift (<<<)
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_arith_shl.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment");
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::ArithmeticShiftLeft));
+
+    // Test arithmetic right shift (>>>)
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_arith_shr.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment");
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::ArithmeticShiftRight));
+}
+
+#[test]
+fn test_modulo_operator() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_mod.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment");
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::Modulo));
+}
+
+#[test]
+fn test_bitwise_xnor_operator() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let content = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_bit_xnor.sv"),
+    )
+    .unwrap();
+
+    let result = parser.parse_content(&content).unwrap();
+    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        panic!("Expected module declaration");
+    };
+    let initial_block = items
+        .iter()
+        .find_map(|item| {
+            if let ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                ..
+            } = item
+            {
+                if *block_type == ProceduralBlockType::Initial {
+                    Some(statements)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("Expected initial block");
+
+    let first_stmt = &initial_block[0];
+    let Statement::Assignment { expr, .. } = first_stmt else {
+        panic!("Expected assignment");
+    };
+
+    let Expression::Binary { op, .. } = expr else {
+        panic!("Expected binary expression");
+    };
+    assert!(matches!(op, BinaryOp::BitwiseXnor));
 }

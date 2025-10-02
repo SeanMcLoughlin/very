@@ -353,24 +353,30 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Modulo, // %
     And,
     Or,
     Xor,
-    LogicalEquiv,     // <->
-    LogicalImpl,      // ->
-    Equal,            // ==
-    NotEqual,         // !=
-    CaseEqual,        // ===
-    CaseNotEqual,     // !==
-    WildcardEqual,    // ==?
-    WildcardNotEqual, // !=?
-    LogicalAnd,       // &&
-    LogicalOr,        // ||
-    GreaterThan,      // >
-    LessThan,         // <
-    GreaterEqual,     // >=
-    LessEqual,        // <=
-    Power,            // **
+    BitwiseXnor,          // ~^
+    LogicalShiftLeft,     // <<
+    LogicalShiftRight,    // >>
+    ArithmeticShiftLeft,  // <<<
+    ArithmeticShiftRight, // >>>
+    LogicalEquiv,         // <->
+    LogicalImpl,          // ->
+    Equal,                // ==
+    NotEqual,             // !=
+    CaseEqual,            // ===
+    CaseNotEqual,         // !==
+    WildcardEqual,        // ==?
+    WildcardNotEqual,     // !=?
+    LogicalAnd,           // &&
+    LogicalOr,            // ||
+    GreaterThan,          // >
+    LessThan,             // <
+    GreaterEqual,         // >=
+    LessEqual,            // <=
+    Power,                // **
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

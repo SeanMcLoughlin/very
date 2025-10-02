@@ -731,9 +731,14 @@ impl SystemVerilogParser {
             ))
             .padded_by(whitespace.clone());
 
-            let binary_op = choice((
+            // Multi-character operators (must come before single-character ones)
+            let multi_char_ops = choice((
                 just("<->").to(BinaryOp::LogicalEquiv),
                 just("**").to(BinaryOp::Power),
+                just("<<<").to(BinaryOp::ArithmeticShiftLeft),
+                just(">>>").to(BinaryOp::ArithmeticShiftRight),
+                just("<<").to(BinaryOp::LogicalShiftLeft),
+                just(">>").to(BinaryOp::LogicalShiftRight),
                 just("<=").to(BinaryOp::LessEqual),
                 just(">=").to(BinaryOp::GreaterEqual),
                 just("&&").to(BinaryOp::LogicalAnd),
@@ -745,17 +750,23 @@ impl SystemVerilogParser {
                 just("!=?").to(BinaryOp::WildcardNotEqual),
                 just("==").to(BinaryOp::Equal),
                 just("!=").to(BinaryOp::NotEqual),
+                just("~^").to(BinaryOp::BitwiseXnor),
+            ));
+
+            let single_char_ops = choice((
                 just('<').to(BinaryOp::LessThan),
                 just('>').to(BinaryOp::GreaterThan),
                 just('+').to(BinaryOp::Add),
                 just('-').to(BinaryOp::Sub),
                 just('*').to(BinaryOp::Mul),
                 just('/').to(BinaryOp::Div),
+                just('%').to(BinaryOp::Modulo),
                 just('&').to(BinaryOp::And),
                 just('|').to(BinaryOp::Or),
                 just('^').to(BinaryOp::Xor),
-            ))
-            .padded_by(whitespace.clone());
+            ));
+
+            let binary_op = choice((multi_char_ops, single_char_ops)).padded_by(whitespace.clone());
 
             factor
                 .clone()
