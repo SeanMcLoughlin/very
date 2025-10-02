@@ -55,8 +55,14 @@ struct Symbol {
 #[derive(Debug, Clone)]
 enum SymbolType {
     Module,
+    Class,
+    Function,
+    #[allow(dead_code)]
+    Task,
     Variable,
     Port,
+    #[allow(dead_code)]
+    Parameter,
     Define,
     Include,
 }
@@ -310,6 +316,9 @@ impl LanguageServer for Backend {
                 implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
                 references_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -501,8 +510,15 @@ impl LanguageServer for Backend {
                 // Only rename symbols of compatible types
                 let should_rename = match (&symbol.symbol_type, &reference.symbol_type) {
                     (SymbolType::Module, SymbolType::Module) => true,
-                    (SymbolType::Variable, _) | (SymbolType::Port, _) => true,
-                    (_, SymbolType::Variable) | (_, SymbolType::Port) => true,
+                    (SymbolType::Class, SymbolType::Class) => true,
+                    (SymbolType::Function, SymbolType::Function) => true,
+                    (SymbolType::Task, SymbolType::Task) => true,
+                    (SymbolType::Variable, _)
+                    | (SymbolType::Port, _)
+                    | (SymbolType::Parameter, _) => true,
+                    (_, SymbolType::Variable)
+                    | (_, SymbolType::Port)
+                    | (_, SymbolType::Parameter) => true,
                     (SymbolType::Define, SymbolType::Define) => true,
                     (SymbolType::Include, SymbolType::Include) => true,
                     _ => false,
@@ -672,11 +688,20 @@ impl LanguageServer for Backend {
             // Look up all occurrences of this symbol
             let workspace_symbols = self.workspace_symbols.read().await;
             if let Some(symbol_list) = workspace_symbols.get(&name) {
-                // For definition, we want the first declaration (typically the module/variable declaration)
-                // We'll prioritize Module and Port symbols as definitions
+                // For definition, we want the first declaration (typically the module/class/function declaration)
+                // We'll prioritize declaration-type symbols (Module, Class, Function, Task, Port) as definitions
                 let definition = symbol_list
                     .iter()
-                    .find(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Port))
+                    .find(|s| {
+                        matches!(
+                            s.symbol_type,
+                            SymbolType::Module
+                                | SymbolType::Class
+                                | SymbolType::Function
+                                | SymbolType::Task
+                                | SymbolType::Port
+                        )
+                    })
                     .or_else(|| symbol_list.first());
 
                 if let Some(def_symbol) = definition {
@@ -738,12 +763,12 @@ impl LanguageServer for Backend {
         };
 
         if let Some(name) = symbol_name {
-            // Look for module definitions
+            // Look for module and class type definitions
             let workspace_symbols = self.workspace_symbols.read().await;
             if let Some(symbol_list) = workspace_symbols.get(&name) {
                 let type_def = symbol_list
                     .iter()
-                    .find(|s| matches!(s.symbol_type, SymbolType::Module));
+                    .find(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Class));
 
                 if let Some(def_symbol) = type_def {
                     return Ok(Some(GotoTypeDefinitionResponse::Scalar(Location {
@@ -780,12 +805,12 @@ impl LanguageServer for Backend {
         };
 
         if let Some(name) = symbol_name {
-            // Look for all module definitions with this name
+            // Look for all module and class implementations with this name
             let workspace_symbols = self.workspace_symbols.read().await;
             if let Some(symbol_list) = workspace_symbols.get(&name) {
                 let implementations: Vec<Location> = symbol_list
                     .iter()
-                    .filter(|s| matches!(s.symbol_type, SymbolType::Module))
+                    .filter(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Class))
                     .map(|s| Location {
                         uri: s.uri.clone(),
                         range: s.range,
@@ -837,6 +862,59 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> LspResult<Option<Vec<SymbolInformation>>> {
+        let query = params.query.to_lowercase();
+
+        let workspace_symbols = self.workspace_symbols.read().await;
+        let mut results = Vec::new();
+
+        // Search through all symbols
+        for (name, symbols) in workspace_symbols.iter() {
+            // Case-insensitive substring match
+            if name.to_lowercase().contains(&query) {
+                for symbol in symbols {
+                    // Convert SymbolType to LSP SymbolKind and get display prefix
+                    let (kind, type_prefix) = match symbol.symbol_type {
+                        SymbolType::Module => (SymbolKind::MODULE, "module"),
+                        SymbolType::Class => (SymbolKind::CLASS, "class"),
+                        SymbolType::Function => (SymbolKind::FUNCTION, "function"),
+                        SymbolType::Task => (SymbolKind::FUNCTION, "task"),
+                        SymbolType::Variable => (SymbolKind::VARIABLE, "variable"),
+                        SymbolType::Port => (SymbolKind::PROPERTY, "port"),
+                        SymbolType::Parameter => (SymbolKind::CONSTANT, "parameter"),
+                        SymbolType::Define => (SymbolKind::CONSTANT, "`define"),
+                        SymbolType::Include => (SymbolKind::FILE, "`include"),
+                    };
+
+                    // Display name with type prefix (e.g., "module top")
+                    let display_name = format!("{} {}", type_prefix, symbol.name);
+
+                    #[allow(deprecated)]
+                    results.push(SymbolInformation {
+                        name: display_name,
+                        kind,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: symbol.uri.clone(),
+                            range: symbol.range,
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
     async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
@@ -864,8 +942,14 @@ impl LanguageServer for Backend {
         {
             let hover_text = match symbol.symbol_type {
                 SymbolType::Module => format!("```systemverilog\nmodule {}\n```", symbol.name),
+                SymbolType::Class => format!("```systemverilog\nclass {}\n```", symbol.name),
+                SymbolType::Function => format!("```systemverilog\nfunction {}\n```", symbol.name),
+                SymbolType::Task => format!("```systemverilog\ntask {}\n```", symbol.name),
                 SymbolType::Variable => format!("```systemverilog\n{}\n```", symbol.name),
                 SymbolType::Port => format!("```systemverilog\nport {}\n```", symbol.name),
+                SymbolType::Parameter => {
+                    format!("```systemverilog\nparameter {}\n```", symbol.name)
+                }
                 SymbolType::Define => format!("```systemverilog\n`define {}\n```", symbol.name),
                 SymbolType::Include => {
                     format!("```systemverilog\n`include \"{}\"\n```", symbol.name)
@@ -882,6 +966,96 @@ impl LanguageServer for Backend {
         }
 
         Ok(None)
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> LspResult<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut symbols = Vec::new();
+
+        // Convert our symbols to LSP DocumentSymbol format
+        for symbol in &doc_state.symbols {
+            let kind = match symbol.symbol_type {
+                SymbolType::Module => SymbolKind::MODULE,
+                SymbolType::Class => SymbolKind::CLASS,
+                SymbolType::Function => SymbolKind::FUNCTION,
+                SymbolType::Task => SymbolKind::FUNCTION,
+                SymbolType::Variable => SymbolKind::VARIABLE,
+                SymbolType::Port => SymbolKind::PROPERTY,
+                SymbolType::Parameter => SymbolKind::CONSTANT,
+                SymbolType::Define => SymbolKind::CONSTANT,
+                SymbolType::Include => SymbolKind::FILE,
+            };
+
+            #[allow(deprecated)]
+            symbols.push(DocumentSymbol {
+                name: symbol.name.clone(),
+                detail: None,
+                kind,
+                tags: None,
+                deprecated: None,
+                range: symbol.range,
+                selection_range: symbol.range,
+                children: None,
+            });
+        }
+
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        }
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> LspResult<Option<Vec<DocumentHighlight>>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Find the symbol at the cursor position
+        let symbol_at_position = doc_state
+            .symbols
+            .iter()
+            .find(|symbol| self.position_in_range(position, symbol.range));
+
+        if let Some(symbol) = symbol_at_position {
+            let mut highlights = Vec::new();
+
+            // Find all occurrences of this symbol in the current document
+            for other_symbol in &doc_state.symbols {
+                if other_symbol.name == symbol.name {
+                    highlights.push(DocumentHighlight {
+                        range: other_symbol.range,
+                        kind: Some(DocumentHighlightKind::TEXT),
+                    });
+                }
+            }
+
+            if highlights.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(highlights))
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
@@ -1451,7 +1625,7 @@ impl Backend {
                 if let Some(range) = self.span_to_range(content, *name_span) {
                     symbols.push(Symbol {
                         name: name.clone(),
-                        symbol_type: SymbolType::Module, // Reuse Module type for now
+                        symbol_type: SymbolType::Class,
                         range,
                         uri: uri.clone(),
                     });
@@ -1620,7 +1794,7 @@ impl Backend {
                 if let Some(range) = self.span_to_range(content, *name_span) {
                     symbols.push(Symbol {
                         name: name.clone(),
-                        symbol_type: SymbolType::Variable, // Could add a Method type later
+                        symbol_type: SymbolType::Function,
                         range,
                         uri: uri.clone(),
                     });
