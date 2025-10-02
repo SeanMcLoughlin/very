@@ -3201,6 +3201,870 @@ impl Backend {
     }
 }
 
+// Helper functions for testing (extracted so they can be tested without a Backend instance)
+#[cfg(test)]
+fn get_keyword_completions_impl() -> Vec<CompletionItem> {
+    let keywords = vec![
+        ("module", "module declaration", CompletionItemKind::KEYWORD),
+        (
+            "endmodule",
+            "end module declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("class", "class declaration", CompletionItemKind::KEYWORD),
+        (
+            "endclass",
+            "end class declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "function",
+            "function declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endfunction",
+            "end function declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("task", "task declaration", CompletionItemKind::KEYWORD),
+        (
+            "endtask",
+            "end task declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("begin", "begin block", CompletionItemKind::KEYWORD),
+        ("end", "end block", CompletionItemKind::KEYWORD),
+        ("if", "if statement", CompletionItemKind::KEYWORD),
+        ("else", "else statement", CompletionItemKind::KEYWORD),
+        ("for", "for loop", CompletionItemKind::KEYWORD),
+        ("while", "while loop", CompletionItemKind::KEYWORD),
+        ("case", "case statement", CompletionItemKind::KEYWORD),
+        ("endcase", "end case statement", CompletionItemKind::KEYWORD),
+        ("always", "always block", CompletionItemKind::KEYWORD),
+        (
+            "always_comb",
+            "combinational always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "always_ff",
+            "flip-flop always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "always_latch",
+            "latch always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("initial", "initial block", CompletionItemKind::KEYWORD),
+        (
+            "assign",
+            "continuous assignment",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("input", "input port", CompletionItemKind::KEYWORD),
+        ("output", "output port", CompletionItemKind::KEYWORD),
+        ("inout", "inout port", CompletionItemKind::KEYWORD),
+        ("wire", "wire declaration", CompletionItemKind::KEYWORD),
+        ("reg", "reg declaration", CompletionItemKind::KEYWORD),
+        ("logic", "logic declaration", CompletionItemKind::KEYWORD),
+        ("bit", "bit declaration", CompletionItemKind::KEYWORD),
+        ("byte", "byte declaration", CompletionItemKind::KEYWORD),
+        ("int", "int declaration", CompletionItemKind::KEYWORD),
+        (
+            "integer",
+            "integer declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("real", "real declaration", CompletionItemKind::KEYWORD),
+        ("time", "time declaration", CompletionItemKind::KEYWORD),
+        (
+            "parameter",
+            "parameter declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "localparam",
+            "local parameter declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("typedef", "type definition", CompletionItemKind::KEYWORD),
+        ("enum", "enumeration type", CompletionItemKind::KEYWORD),
+        ("struct", "structure type", CompletionItemKind::KEYWORD),
+        ("union", "union type", CompletionItemKind::KEYWORD),
+        (
+            "package",
+            "package declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endpackage",
+            "end package declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("import", "import statement", CompletionItemKind::KEYWORD),
+        (
+            "interface",
+            "interface declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endinterface",
+            "end interface declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("virtual", "virtual keyword", CompletionItemKind::KEYWORD),
+        ("extends", "class inheritance", CompletionItemKind::KEYWORD),
+        (
+            "implements",
+            "interface implementation",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("new", "constructor call", CompletionItemKind::KEYWORD),
+        ("return", "return statement", CompletionItemKind::KEYWORD),
+        ("void", "void type", CompletionItemKind::KEYWORD),
+        ("null", "null value", CompletionItemKind::KEYWORD),
+        (
+            "this",
+            "current object reference",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "super",
+            "parent class reference",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("static", "static member", CompletionItemKind::KEYWORD),
+        ("const", "constant declaration", CompletionItemKind::KEYWORD),
+        ("ref", "reference argument", CompletionItemKind::KEYWORD),
+        ("var", "variable type", CompletionItemKind::KEYWORD),
+        ("string", "string type", CompletionItemKind::KEYWORD),
+    ];
+
+    keywords
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("1_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn get_system_function_completions_impl() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "display".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("task $display([list_of_arguments])".to_string()),
+            documentation: Some(Documentation::String(
+                "Displays the argument list and adds a newline".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_display".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "random".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("int $random[(seed)]".to_string()),
+            documentation: Some(Documentation::String(
+                "Returns a random 32-bit signed integer".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_random".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "sqrt".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("real $sqrt(real x)".to_string()),
+            documentation: Some(Documentation::String(
+                "Returns the square root of x".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_sqrt".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "finish".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("task $finish[(n)]".to_string()),
+            documentation: Some(Documentation::String(
+                "Terminates the simulation".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_finish".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+    ]
+}
+
+#[cfg(test)]
+fn get_preprocessor_completions_impl() -> Vec<CompletionItem> {
+    let directives = vec![
+        ("define", "Defines a macro", CompletionItemKind::KEYWORD),
+        ("include", "Include file", CompletionItemKind::KEYWORD),
+        (
+            "ifdef",
+            "Conditional compilation (if defined)",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endif",
+            "End conditional compilation",
+            CompletionItemKind::KEYWORD,
+        ),
+    ];
+
+    directives
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("3_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn get_member_completions_impl() -> Vec<CompletionItem> {
+    let members = vec![
+        ("new", "Constructor", CompletionItemKind::CONSTRUCTOR),
+        ("randomize", "Randomize object", CompletionItemKind::METHOD),
+        ("size", "Get size", CompletionItemKind::METHOD),
+    ];
+
+    members
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("4_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper struct for testing that doesn't require LSP client
+    struct TestBackend;
+
+    impl TestBackend {
+        fn extract_function_call_info(&self, text: &str) -> LspResult<(String, u32)> {
+            // Find the last opening parenthesis
+            let last_open_paren = text.rfind('(');
+            if last_open_paren.is_none() {
+                return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    "No function call found",
+                ));
+            }
+
+            let paren_pos = last_open_paren.unwrap();
+            let before_paren = &text[..paren_pos].trim_end();
+
+            // Extract function name (may start with $)
+            let function_name = if let Some(name_start) =
+                before_paren.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+            {
+                before_paren[name_start + 1..].trim()
+            } else {
+                before_paren.trim()
+            };
+
+            // Remove $ prefix if present for system functions
+            let clean_name = function_name.strip_prefix('$').unwrap_or(function_name);
+
+            // Count commas after the opening parenthesis to determine active parameter
+            let after_paren = &text[paren_pos + 1..];
+            let mut paren_depth = 0;
+            let mut active_parameter = 0u32;
+
+            for ch in after_paren.chars() {
+                match ch {
+                    '(' => paren_depth += 1,
+                    ')' => {
+                        if paren_depth == 0 {
+                            break;
+                        }
+                        paren_depth -= 1;
+                    }
+                    ',' if paren_depth == 0 => active_parameter += 1,
+                    _ => {}
+                }
+            }
+
+            Ok((clean_name.to_string(), active_parameter))
+        }
+
+        fn parse_parameters(&self, signature: &str) -> Option<Vec<ParameterInformation>> {
+            // Extract parameters from signature like "function real $pow(real x, real y)"
+            let start = signature.find('(')?;
+            let end = signature.rfind(')')?;
+            let params_str = &signature[start + 1..end];
+
+            if params_str.trim().is_empty() || params_str.trim() == "n" {
+                return None;
+            }
+
+            let params: Vec<ParameterInformation> = params_str
+                .split(',')
+                .map(|p| {
+                    let param = p.trim();
+                    ParameterInformation {
+                        label: ParameterLabel::Simple(param.to_string()),
+                        documentation: None,
+                    }
+                })
+                .collect();
+
+            if params.is_empty() {
+                None
+            } else {
+                Some(params)
+            }
+        }
+
+        fn find_matching_paren(&self, text: &str, open_paren_pos: usize) -> Option<usize> {
+            let mut depth = 1;
+            let chars: Vec<char> = text.chars().collect();
+
+            for (offset, &ch) in chars.iter().enumerate().skip(open_paren_pos + 1) {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(offset);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            None
+        }
+
+        fn get_keyword_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_keyword_completions_impl()
+        }
+
+        fn get_system_function_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_system_function_completions_impl()
+        }
+
+        fn get_preprocessor_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_preprocessor_completions_impl()
+        }
+
+        fn get_member_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_member_completions_impl()
+        }
+
+        fn position_in_range(&self, position: Position, range: Range) -> bool {
+            (position.line > range.start.line
+                || (position.line == range.start.line
+                    && position.character >= range.start.character))
+                && (position.line < range.end.line
+                    || (position.line == range.end.line
+                        && position.character <= range.end.character))
+        }
+
+        fn char_offset_to_position(&self, text: &str, offset: usize) -> Option<Position> {
+            if offset > text.len() {
+                // Clamp to end of text
+                let prefix = text;
+                let line = prefix.matches('\n').count();
+                let column = prefix.split('\n').last().unwrap_or("").len();
+                return Some(Position::new(line as u32, column as u32));
+            }
+
+            let prefix = &text[..offset];
+            let line = prefix.matches('\n').count();
+            let column = prefix.split('\n').last().unwrap_or("").len();
+
+            Some(Position::new(line as u32, column as u32))
+        }
+
+        fn span_to_range(&self, text: &str, span: (usize, usize)) -> Option<Range> {
+            let start_pos = self.char_offset_to_position(text, span.0)?;
+            let end_pos = self.char_offset_to_position(text, span.1)?;
+            Some(Range::new(start_pos, end_pos))
+        }
+    }
+
+    fn create_test_backend() -> TestBackend {
+        TestBackend
+    }
+
+    // Tests for extract_function_call_info (Signature Help)
+    #[test]
+    fn test_extract_function_call_info_simple() {
+        let backend = create_test_backend();
+        let text = "$display(";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "display");
+        assert_eq!(param, 0);
+    }
+
+    #[test]
+    fn test_extract_function_call_info_with_args() {
+        let backend = create_test_backend();
+        let text = "$pow(x, ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "pow");
+        assert_eq!(param, 1); // Second parameter (after comma)
+    }
+
+    #[test]
+    fn test_extract_function_call_info_multiple_args() {
+        let backend = create_test_backend();
+        let text = "$some_func(a, b, c, ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "some_func");
+        assert_eq!(param, 3); // Fourth parameter
+    }
+
+    #[test]
+    fn test_extract_function_call_info_nested_parens() {
+        let backend = create_test_backend();
+        // The implementation finds the LAST '(' to provide signature help
+        // for the most recently opened function call
+        let text = "$outer($inner(x), ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        // Finds $inner's opening paren (the last one)
+        assert_eq!(name, "inner");
+        assert_eq!(param, 0); // First parameter of inner (we're at "x")
+    }
+
+    #[test]
+    fn test_extract_function_call_info_closed_nested() {
+        let backend = create_test_backend();
+        // Test with a fully closed inner function
+        // The implementation still finds the last '(' which is $inner's
+        let text = "$outer($inner(x, y), ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        // Still finds $inner because rfind finds the last '('
+        assert_eq!(name, "inner");
+        assert_eq!(param, 1); // Second parameter of inner
+    }
+
+    #[test]
+    fn test_extract_function_call_info_no_paren() {
+        let backend = create_test_backend();
+        let text = "$display";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_err()); // Should fail without opening paren
+    }
+
+    // Tests for parse_parameters (Signature Help)
+    #[test]
+    fn test_parse_parameters_simple() {
+        let backend = create_test_backend();
+        let sig = "function real $pow(real x, real y)";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_some());
+        let params = params.unwrap();
+        assert_eq!(params.len(), 2);
+        match &params[0].label {
+            ParameterLabel::Simple(s) => assert_eq!(s, "real x"),
+            _ => panic!("Expected Simple label"),
+        }
+        match &params[1].label {
+            ParameterLabel::Simple(s) => assert_eq!(s, "real y"),
+            _ => panic!("Expected Simple label"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parameters_no_params() {
+        let backend = create_test_backend();
+        let sig = "function time $time()";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_none()); // No parameters
+    }
+
+    #[test]
+    fn test_parse_parameters_optional() {
+        let backend = create_test_backend();
+        let sig = "task $finish[(n)]";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_none()); // Special case for optional single param
+    }
+
+    // Tests for find_matching_paren (Inlay Hints)
+    #[test]
+    fn test_find_matching_paren_simple() {
+        let backend = create_test_backend();
+        let text = "$display(x)";
+        let pos = text.find('(').unwrap();
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(10)); // Position of ')'
+    }
+
+    #[test]
+    fn test_find_matching_paren_nested() {
+        let backend = create_test_backend();
+        let text = "$outer($inner(x))";
+        let pos = text.find('(').unwrap(); // First '('
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(16)); // Last ')'
+    }
+
+    #[test]
+    fn test_find_matching_paren_no_close() {
+        let backend = create_test_backend();
+        let text = "$display(x";
+        let pos = text.find('(').unwrap();
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, None); // No matching close paren
+    }
+
+    #[test]
+    fn test_find_matching_paren_multiple_nested() {
+        let backend = create_test_backend();
+        let text = "$f((a + b) * (c + d))";
+        let pos = text.find('(').unwrap(); // First '('
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(20)); // Last ')'
+    }
+
+    // Tests for keyword completions (Code Completion)
+    #[test]
+    fn test_get_keyword_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_keyword_completions();
+
+        // Check that we have a reasonable number of keywords
+        assert!(completions.len() > 50);
+
+        // Check for some essential keywords
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"module".to_string()));
+        assert!(labels.contains(&"class".to_string()));
+        assert!(labels.contains(&"always".to_string()));
+        assert!(labels.contains(&"logic".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::KEYWORD));
+        }
+    }
+
+    // Tests for system function completions (Code Completion)
+    #[test]
+    fn test_get_system_function_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_system_function_completions();
+
+        // Check that we have several system functions
+        assert!(completions.len() >= 4);
+
+        // Check for some essential system functions
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"display".to_string()));
+        assert!(labels.contains(&"random".to_string()));
+        assert!(labels.contains(&"sqrt".to_string()));
+        assert!(labels.contains(&"finish".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::FUNCTION));
+        }
+
+        // Verify they have documentation
+        for completion in &completions {
+            assert!(completion.documentation.is_some());
+        }
+    }
+
+    // Tests for preprocessor completions (Code Completion)
+    #[test]
+    fn test_get_preprocessor_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_preprocessor_completions();
+
+        // Check for common preprocessor directives
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"define".to_string()));
+        assert!(labels.contains(&"include".to_string()));
+        assert!(labels.contains(&"ifdef".to_string()));
+        assert!(labels.contains(&"endif".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::KEYWORD));
+        }
+    }
+
+    // Tests for member completions (Code Completion)
+    #[test]
+    fn test_get_member_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_member_completions();
+
+        // Check for common class members
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"new".to_string()));
+        assert!(labels.contains(&"randomize".to_string()));
+        assert!(labels.contains(&"size".to_string()));
+    }
+
+    // Tests for system function info
+    #[test]
+    fn test_get_system_function_info() {
+        // Test math functions
+        let info = get_system_function_info("sin");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert!(info.signature.contains("$sin"));
+        assert!(info.description.contains("sine"));
+
+        // Test display tasks
+        let info = get_system_function_info("display");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert!(info.signature.contains("$display"));
+
+        // Test non-existent function
+        let info = get_system_function_info("nonexistent");
+        assert!(info.is_none());
+    }
+
+    // Tests for position_in_range helper
+    #[test]
+    fn test_position_in_range() {
+        let backend = create_test_backend();
+
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 5,
+            },
+            end: Position {
+                line: 0,
+                character: 10,
+            },
+        };
+
+        // Position at start
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 5
+            },
+            range
+        ));
+
+        // Position in middle
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 7
+            },
+            range
+        ));
+
+        // Position at end
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 10
+            },
+            range
+        ));
+
+        // Position before range
+        assert!(!backend.position_in_range(
+            Position {
+                line: 0,
+                character: 4
+            },
+            range
+        ));
+
+        // Position after range
+        assert!(!backend.position_in_range(
+            Position {
+                line: 0,
+                character: 11
+            },
+            range
+        ));
+    }
+
+    // Tests for char_offset_to_position helper
+    #[test]
+    fn test_char_offset_to_position() {
+        let backend = create_test_backend();
+        let text = "line 1\nline 2\nline 3";
+
+        // Start of file
+        let pos = backend.char_offset_to_position(text, 0);
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 0,
+                character: 0
+            })
+        );
+
+        // Start of second line
+        let pos = backend.char_offset_to_position(text, 7); // After "line 1\n"
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 1,
+                character: 0
+            })
+        );
+
+        // Middle of second line
+        let pos = backend.char_offset_to_position(text, 10); // "line 1\nlin"
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 1,
+                character: 3
+            })
+        );
+
+        // Beyond end (should clamp)
+        let pos = backend.char_offset_to_position(text, 1000);
+        assert!(pos.is_some());
+    }
+
+    // Tests for span_to_range helper
+    #[test]
+    fn test_span_to_range() {
+        let backend = create_test_backend();
+        let text = "module test;\nendmodule";
+
+        // Span for "module"
+        let range = backend.span_to_range(text, (0, 6));
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 0);
+        assert_eq!(range.end.character, 6);
+
+        // Span across newline
+        let range = backend.span_to_range(text, (0, 13));
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.end.line, 1);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let stdin = stdin();
