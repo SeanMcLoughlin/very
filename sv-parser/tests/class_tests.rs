@@ -142,7 +142,7 @@ fn test_class_in_module() {
     match &ast.items[0] {
         ModuleItem::ModuleDeclaration { name, items, .. } => {
             assert_eq!(name, "top");
-            assert_eq!(items.len(), 2); // class + variable declaration
+            assert_eq!(items.len(), 3); // class + variable declaration + initial block
 
             // Check class declaration
             match &items[0] {

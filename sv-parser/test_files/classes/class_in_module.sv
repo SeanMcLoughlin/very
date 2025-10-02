@@ -5,4 +5,8 @@ module top();
         int a = 23;
     endclass
     test_cls obj;
+
+    initial begin
+
+    end
 endmodule

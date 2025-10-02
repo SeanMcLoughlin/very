@@ -319,6 +319,7 @@ impl LanguageServer for Backend {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -656,33 +657,61 @@ impl LanguageServer for Backend {
                     )
                     .await;
 
-                // The name is the resolved path for includes
-                if let Ok(file_uri) = Url::from_file_path(&name) {
-                    self.client
-                        .log_message(MessageType::INFO, format!("Navigating to: {}", file_uri))
-                        .await;
+                // Try to resolve the include path
+                let include_path = std::path::Path::new(&name);
 
-                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                        uri: file_uri,
-                        range: Range {
-                            start: Position {
-                                line: 0,
-                                character: 0,
-                            },
-                            end: Position {
-                                line: 0,
-                                character: 0,
-                            },
-                        },
-                    })));
+                // If it's already an absolute path (resolved), use it directly
+                let resolved = if include_path.is_absolute() {
+                    Some(include_path.to_path_buf())
                 } else {
-                    self.client
-                        .log_message(
-                            MessageType::ERROR,
-                            format!("Failed to create file URI from: {}", name),
-                        )
-                        .await;
+                    // Try to resolve relative to the current file's directory
+                    uri.to_file_path().ok().and_then(|current_file| {
+                        let current_dir = current_file.parent()?;
+                        let candidate = current_dir.join(&name);
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+
+                        // Try looking in common include directories relative to current file
+                        for include_dir in &["include", "../include", "../../include"] {
+                            let candidate = current_dir.join(include_dir).join(&name);
+                            if candidate.exists() {
+                                return Some(candidate);
+                            }
+                        }
+                        None
+                    })
+                };
+
+                if let Some(resolved_path) = resolved {
+                    if let Ok(file_uri) = Url::from_file_path(&resolved_path) {
+                        self.client
+                            .log_message(MessageType::INFO, format!("Navigating to: {}", file_uri))
+                            .await;
+
+                        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                            uri: file_uri,
+                            range: Range {
+                                start: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                            },
+                        })));
+                    }
                 }
+
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("Could not resolve include file: {}", name),
+                    )
+                    .await;
+                return Ok(None);
             }
 
             // Look up all occurrences of this symbol
@@ -952,7 +981,69 @@ impl LanguageServer for Backend {
                 }
                 SymbolType::Define => format!("```systemverilog\n`define {}\n```", symbol.name),
                 SymbolType::Include => {
-                    format!("```systemverilog\n`include \"{}\"\n```", symbol.name)
+                    let include_path = std::path::Path::new(&symbol.name);
+
+                    // Try to resolve the include path
+                    let resolved = if include_path.is_absolute() {
+                        Some(include_path.to_path_buf())
+                    } else {
+                        // Try to resolve relative to the current file's directory
+                        uri.to_file_path().ok().and_then(|current_file| {
+                            let current_dir = current_file.parent()?;
+                            let candidate = current_dir.join(&symbol.name);
+                            if candidate.exists() {
+                                return Some(candidate);
+                            }
+
+                            // Try looking in common include directories relative to current file
+                            for include_dir in &["include", "../include", "../../include"] {
+                                let candidate = current_dir.join(include_dir).join(&symbol.name);
+                                if candidate.exists() {
+                                    return Some(candidate);
+                                }
+                            }
+                            None
+                        })
+                    };
+
+                    // Format the path for display (relative to workspace root if possible)
+                    let display_path = if let Some(resolved_path) = resolved {
+                        // Canonicalize to resolve .. and . components
+                        let canonical = resolved_path.canonicalize().unwrap_or(resolved_path);
+
+                        // Try to make it relative to workspace root
+                        if let Ok(current_file) = uri.to_file_path() {
+                            if let Some(current_dir) = current_file.parent() {
+                                // Find workspace root by looking for .git or .sv-lsp.toml
+                                let mut workspace_root = current_dir;
+                                while let Some(parent) = workspace_root.parent() {
+                                    if parent.join(".git").exists()
+                                        || parent.join(".sv-lsp.toml").exists()
+                                    {
+                                        workspace_root = parent;
+                                        break;
+                                    }
+                                    workspace_root = parent;
+                                }
+
+                                // Make path relative to workspace root
+                                if let Ok(rel) = canonical.strip_prefix(workspace_root) {
+                                    rel.display().to_string()
+                                } else {
+                                    canonical.display().to_string()
+                                }
+                            } else {
+                                canonical.display().to_string()
+                            }
+                        } else {
+                            canonical.display().to_string()
+                        }
+                    } else {
+                        // Couldn't resolve, just show the original path
+                        symbol.name.clone()
+                    };
+
+                    format!("```systemverilog\n`include \"{}\"\n```", display_path)
                 }
             };
 
@@ -1058,6 +1149,41 @@ impl LanguageServer for Backend {
         }
     }
 
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> LspResult<Option<Vec<SelectionRange>>> {
+        let uri = params.text_document.uri;
+        let positions = params.positions;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        if doc_state.ast.is_none() {
+            return Ok(None);
+        }
+
+        let ast = doc_state.ast.as_ref().unwrap();
+        let content = &doc_state.content;
+
+        let mut results = Vec::new();
+
+        for position in positions {
+            if let Some(selection) = self.find_selection_range_at_position(ast, content, position) {
+                results.push(selection);
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         self.client
             .log_message(MessageType::INFO, "Configuration changed")
@@ -1113,12 +1239,14 @@ impl Backend {
                 }
             }
 
-            // Add new symbols
+            // Add new symbols (skip Include symbols as they're file-specific)
             for symbol in symbols {
-                workspace_symbols
-                    .entry(symbol.name.clone())
-                    .or_insert_with(Vec::new)
-                    .push(symbol);
+                if !matches!(symbol.symbol_type, SymbolType::Include) {
+                    workspace_symbols
+                        .entry(symbol.name.clone())
+                        .or_insert_with(Vec::new)
+                        .push(symbol);
+                }
             }
         }
 
@@ -1971,10 +2099,16 @@ impl Backend {
         ranges: &mut Vec<FoldingRange>,
     ) {
         match item {
-            ModuleItem::ModuleDeclaration { name, items, .. } => {
-                // Find the module folding range
-                if let Some(range) = self.find_module_folding_range(name, content) {
-                    ranges.push(range);
+            ModuleItem::ModuleDeclaration {
+                name, items, span, ..
+            } => {
+                // Create folding range from span
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        collapsed_text: Some(format!("module {} ...", name)),
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
                 }
 
                 // Recursively process nested items
@@ -1982,57 +2116,218 @@ impl Backend {
                     self.extract_folding_ranges_from_item(sub_item, content, ranges);
                 }
             }
-            ModuleItem::VariableDeclaration { .. } => {
-                // Variable declarations typically don't need folding
+            ModuleItem::ProceduralBlock { span, .. } => {
+                // Add folding range for procedural blocks (always, initial, etc.)
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
+                }
             }
-            ModuleItem::Assignment { .. } => {
-                // Assignments typically don't need folding unless they're complex
-                // Could add support for complex multi-line assignments here
+            ModuleItem::ClassDeclaration {
+                name, items, span, ..
+            } => {
+                // Add folding range for class
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        collapsed_text: Some(format!("class {} ...", name)),
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
+                }
+
+                // Also add folding ranges for class methods
+                for class_item in items {
+                    if let sv_parser::ClassItem::Method { name, span, .. } = class_item {
+                        if let Some(range) = self.span_to_folding_range(content, *span) {
+                            ranges.push(FoldingRange {
+                                collapsed_text: Some(format!("function {} ...", name)),
+                                kind: Some(FoldingRangeKind::Region),
+                                ..range
+                            });
+                        }
+                    }
+                }
             }
-            ModuleItem::PortDeclaration { .. } => {
-                // Port declarations usually don't need folding
-            }
-            ModuleItem::ProceduralBlock { .. } => {
-                // Procedural blocks could support folding, but we'd need to track begin/end positions
-                // TODO: Add folding range support for procedural blocks
-            }
-            ModuleItem::DefineDirective { .. } => {
-                // Define directives are typically single-line, no folding needed
-            }
-            ModuleItem::IncludeDirective { .. } => {
-                // Include directives are single-line, no folding needed
-            }
-            ModuleItem::ClassDeclaration { .. } => {
-                // TODO: Add folding range support for classes
+            ModuleItem::VariableDeclaration { .. }
+            | ModuleItem::Assignment { .. }
+            | ModuleItem::PortDeclaration { .. }
+            | ModuleItem::DefineDirective { .. }
+            | ModuleItem::IncludeDirective { .. } => {
+                // These items typically don't need folding
             }
         }
     }
 
-    fn find_module_folding_range(&self, module_name: &str, content: &str) -> Option<FoldingRange> {
-        // Find the module declaration and its corresponding endmodule
-        let module_pattern = format!("module {}", module_name);
-        let start_pos = content.find(&module_pattern)?;
+    fn span_to_folding_range(&self, content: &str, span: (usize, usize)) -> Option<FoldingRange> {
+        // Convert byte offsets to line numbers
+        let start_line = content[..span.0].matches('\n').count();
+        let end_line = content[..span.1].matches('\n').count();
 
-        // Find the line number for the start
-        let start_line = content[..start_pos].matches('\n').count();
-
-        // Find the corresponding endmodule
-        // This is a simplified approach - in a real implementation you'd want to handle nested modules
-        let endmodule_pos = content.rfind("endmodule")?;
-        let end_line = content[..endmodule_pos].matches('\n').count();
-
-        // Make sure the endmodule is after the module
-        if end_line > start_line {
+        // Create folding range if it spans multiple lines (at least 2)
+        // Some editors require at least 1 line of difference to show fold indicators
+        if end_line >= start_line + 1 {
             Some(FoldingRange {
                 start_line: start_line as u32,
                 start_character: None,
                 end_line: end_line as u32,
                 end_character: None,
-                kind: Some(FoldingRangeKind::Region),
-                collapsed_text: Some(format!("module {} ...", module_name)),
+                kind: None,           // Will be set by caller
+                collapsed_text: None, // Will be set by caller
             })
         } else {
             None
+        }
+    }
+
+    fn find_selection_range_at_position(
+        &self,
+        ast: &SourceUnit,
+        content: &str,
+        position: Position,
+    ) -> Option<SelectionRange> {
+        // Build a hierarchy of selection ranges from the AST
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+
+        // Find all AST nodes that contain the position
+        for item in &ast.items {
+            self.collect_ranges_containing_position(item, content, position, &mut ranges);
+        }
+
+        if ranges.is_empty() {
+            return None;
+        }
+
+        // Sort ranges by size (smallest first)
+        ranges.sort_by_key(|(start, end)| end - start);
+
+        // Build the selection range hierarchy (parent contains child)
+        let mut selection_range: Option<SelectionRange> = None;
+
+        for span in ranges {
+            if let Some(range) = self.span_to_range(content, span) {
+                selection_range = Some(SelectionRange {
+                    range,
+                    parent: selection_range.map(Box::new),
+                });
+            }
+        }
+
+        selection_range
+    }
+
+    fn collect_ranges_containing_position(
+        &self,
+        item: &ModuleItem,
+        content: &str,
+        position: Position,
+        ranges: &mut Vec<(usize, usize)>,
+    ) {
+        // Helper to check if a span contains the position
+        let contains = |span: (usize, usize)| -> bool {
+            if let Some(range) = self.span_to_range(content, span) {
+                self.position_in_range(position, range)
+            } else {
+                false
+            }
+        };
+
+        match item {
+            ModuleItem::ModuleDeclaration {
+                span,
+                items,
+                name_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                    if contains(*name_span) {
+                        ranges.push(*name_span);
+                    }
+                    // Recursively check nested items
+                    for sub_item in items {
+                        self.collect_ranges_containing_position(
+                            sub_item, content, position, ranges,
+                        );
+                    }
+                }
+            }
+            ModuleItem::ClassDeclaration {
+                span,
+                name_span,
+                items: class_items,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                    if contains(*name_span) {
+                        ranges.push(*name_span);
+                    }
+                    // Check class methods
+                    for class_item in class_items {
+                        if let sv_parser::ClassItem::Method {
+                            span, name_span, ..
+                        } = class_item
+                        {
+                            if contains(*span) {
+                                ranges.push(*span);
+                            }
+                            if contains(*name_span) {
+                                ranges.push(*name_span);
+                            }
+                        } else if let sv_parser::ClassItem::Property {
+                            span, name_span, ..
+                        } = class_item
+                        {
+                            if contains(*span) {
+                                ranges.push(*span);
+                            }
+                            if contains(*name_span) {
+                                ranges.push(*name_span);
+                            }
+                        }
+                    }
+                }
+            }
+            ModuleItem::ProceduralBlock { span, .. } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+            }
+            ModuleItem::VariableDeclaration {
+                span, name_span, ..
+            }
+            | ModuleItem::Assignment {
+                span,
+                target_span: name_span,
+                ..
+            }
+            | ModuleItem::PortDeclaration {
+                span, name_span, ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if contains(*name_span) {
+                    ranges.push(*name_span);
+                }
+            }
+            ModuleItem::DefineDirective {
+                span, name_span, ..
+            }
+            | ModuleItem::IncludeDirective {
+                span,
+                path_span: name_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if contains(*name_span) {
+                    ranges.push(*name_span);
+                }
+            }
         }
     }
 }
