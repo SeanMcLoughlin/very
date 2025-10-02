@@ -29,3 +29,87 @@ fn test_parse_all_variable_files() {
         }
     }
 }
+
+/// Test time unsigned declaration
+#[test]
+fn test_time_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/time_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test time signed declaration
+#[test]
+fn test_time_signed() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/time_signed.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test int unsigned declaration
+#[test]
+fn test_int_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/int_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test byte unsigned declaration
+#[test]
+fn test_byte_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/byte_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test shortint unsigned declaration
+#[test]
+fn test_shortint_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/shortint_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test longint unsigned declaration
+#[test]
+fn test_longint_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/longint_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test bit signed declaration
+#[test]
+fn test_bit_signed() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/bit_signed.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test integer unsigned declaration
+#[test]
+fn test_integer_unsigned() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/integer_unsigned.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}
+
+/// Test integer signed declaration
+#[test]
+fn test_integer_signed() {
+    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/variables/integer_signed.sv");
+    let content = std::fs::read_to_string(&path).unwrap();
+    parser.parse_content(&content).unwrap();
+}

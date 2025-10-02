@@ -868,18 +868,26 @@ impl SystemVerilogParser {
             .recover_with(skip_then_retry_until([';']))
             .padded_by(whitespace.clone());
 
-        // Data type keywords
+        // Data type keywords - order matters! Longer keywords first to avoid prefix matching
         let data_type = choice((
-            just("wire").to("wire".to_string()),
-            just("logic").to("logic".to_string()),
-            just("reg").to("reg".to_string()),
-            just("int").to("int".to_string()),
-            just("bit").to("bit".to_string()),
-            just("byte").to("byte".to_string()),
-            just("shortint").to("shortint".to_string()),
-            just("longint").to("longint".to_string()),
-            just("integer").to("integer".to_string()),
-            just("time").to("time".to_string()),
+            text::keyword("shortint").to("shortint".to_string()),
+            text::keyword("longint").to("longint".to_string()),
+            text::keyword("integer").to("integer".to_string()),
+            text::keyword("logic").to("logic".to_string()),
+            text::keyword("wire").to("wire".to_string()),
+            text::keyword("byte").to("byte".to_string()),
+            text::keyword("time").to("time".to_string()),
+            text::keyword("int").to("int".to_string()),
+            text::keyword("bit").to("bit".to_string()),
+            text::keyword("reg").to("reg".to_string()),
+        ))
+        .padded_by(whitespace.clone());
+
+        // Signing keywords (signed/unsigned)
+        // Use text::keyword to ensure word boundaries
+        let signing = choice((
+            text::keyword("signed").to("signed".to_string()),
+            text::keyword("unsigned").to("unsigned".to_string()),
         ))
         .padded_by(whitespace.clone());
 
@@ -890,8 +898,30 @@ impl SystemVerilogParser {
         //   int count = 5;
         //   logic [3:0] addr = 4'b0000;
         //   logic a, b, c;  (multiple variables)
-        let single_var = identifier_with_span
+        let _single_var = identifier_with_span
             .clone()
+            .then(
+                just('=')
+                    .padded_by(whitespace.clone())
+                    .ignore_then(expr.clone())
+                    .or_not(),
+            )
+            .map(|((name, name_span), initial_value)| (name, name_span, initial_value));
+
+        // Variable name that can't be "signed" or "unsigned" (for use after data types)
+        let single_var_not_signing = identifier_with_span
+            .clone()
+            .try_map(|(name, span), map_span| {
+                if name == "signed" || name == "unsigned" {
+                    Err(chumsky::error::Error::expected_input_found(
+                        map_span,
+                        vec![],
+                        Some('s'),
+                    ))
+                } else {
+                    Ok((name, span))
+                }
+            })
             .then(
                 just('=')
                     .padded_by(whitespace.clone())
@@ -902,25 +932,29 @@ impl SystemVerilogParser {
 
         // Variable declaration with built-in types
         let builtin_var_decl = data_type
+            .then(signing.clone().or_not())
             .then(range.clone().or_not())
             .then(
-                single_var
+                single_var_not_signing
                     .clone()
                     .separated_by(just(',').padded_by(whitespace.clone()))
                     .at_least(1),
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(|((data_type, range), vars), span: std::ops::Range<usize>| {
-                let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
-                ModuleItem::VariableDeclaration {
-                    data_type,
-                    range,
-                    name: name.clone(),
-                    name_span,
-                    initial_value,
-                    span: (span.start, span.end),
-                }
-            });
+            .map_with_span(
+                |(((data_type, signing), range), vars), span: std::ops::Range<usize>| {
+                    let (name, name_span, initial_value) = vars.into_iter().next().unwrap();
+                    ModuleItem::VariableDeclaration {
+                        data_type,
+                        signing,
+                        range,
+                        name: name.clone(),
+                        name_span,
+                        initial_value,
+                        span: (span.start, span.end),
+                    }
+                },
+            );
 
         // Variable declaration with built-in types only
         let variable_declaration = builtin_var_decl
@@ -944,6 +978,7 @@ impl SystemVerilogParser {
                 |((data_type, (name, name_span)), initial_value), span: std::ops::Range<usize>| {
                     ModuleItem::VariableDeclaration {
                         data_type,
+                        signing: None,
                         range: None,
                         name,
                         name_span,

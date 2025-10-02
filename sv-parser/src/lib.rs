@@ -150,6 +150,7 @@ pub enum ModuleItem {
     },
     VariableDeclaration {
         data_type: String,
+        signing: Option<String>,
         range: Option<Range>,
         name: String,
         name_span: Span,
