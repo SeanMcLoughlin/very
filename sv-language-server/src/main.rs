@@ -320,6 +320,23 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    trigger_characters: Some(vec![
+                        "$".to_string(),
+                        ".".to_string(),
+                        "`".to_string(),
+                    ]),
+                    all_commit_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                    completion_item: None,
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -1201,6 +1218,236 @@ impl LanguageServer for Backend {
             self.client
                 .log_message(MessageType::WARNING, "Failed to parse new configuration")
                 .await;
+        }
+    }
+
+    async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut items = Vec::new();
+
+        // Get the current line to determine context
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let current_line = if (position.line as usize) < lines.len() {
+            lines[position.line as usize]
+        } else {
+            ""
+        };
+        let prefix = &current_line[..position.character.min(current_line.len() as u32) as usize];
+
+        // Determine what kind of completion to provide based on context
+        let is_after_dollar = prefix.trim_end().ends_with('$');
+        let is_after_backtick = prefix.trim_end().ends_with('`');
+        let is_after_dot = prefix.trim_end().ends_with('.');
+
+        // 1. System function/task completions (after '$')
+        if is_after_dollar {
+            items.extend(self.get_system_function_completions());
+        }
+
+        // 2. Preprocessor directive completions (after '`')
+        if is_after_backtick {
+            items.extend(self.get_preprocessor_completions());
+        }
+
+        // 3. Member access completions (after '.')
+        if is_after_dot {
+            // For now, we'll provide common class members
+            // In the future, this could be context-aware based on the object type
+            items.extend(self.get_member_completions());
+        }
+
+        // 4. Symbol completions (variables, modules, classes, etc.)
+        if !is_after_dollar && !is_after_backtick {
+            items.extend(self.get_symbol_completions().await);
+        }
+
+        // 5. Keyword completions (always include unless after special character)
+        if !is_after_dollar && !is_after_backtick && !is_after_dot {
+            items.extend(self.get_keyword_completions());
+        }
+
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CompletionResponse::Array(items)))
+        }
+    }
+
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> LspResult<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Get the current line and extract function name and parameter position
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let current_line = if (position.line as usize) < lines.len() {
+            lines[position.line as usize]
+        } else {
+            return Ok(None);
+        };
+
+        // Extract text up to cursor position
+        let text_before_cursor =
+            &current_line[..position.character.min(current_line.len() as u32) as usize];
+
+        // Find the function call by looking backwards for the function name
+        // Look for patterns like $function_name( or function_name(
+        let (function_name, active_parameter) =
+            self.extract_function_call_info(text_before_cursor)?;
+
+        // Check if it's a system function
+        if let Some(info) = get_system_function_info(&function_name) {
+            let signature_info = SignatureInformation {
+                label: info.signature.clone(),
+                documentation: Some(Documentation::String(info.description.clone())),
+                parameters: self.parse_parameters(&info.signature),
+                active_parameter: None, // LSP will compute this from cursor position
+            };
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![signature_info],
+                active_signature: Some(0),
+                active_parameter: Some(active_parameter),
+            }));
+        }
+
+        Ok(None)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        let range = params.range;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut hints = Vec::new();
+
+        // Get lines within the requested range
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let start_line = range.start.line as usize;
+        let end_line = range.end.line.min(lines.len() as u32 - 1) as usize;
+
+        // Scan each line for function calls
+        for (line_idx, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line) {
+            // Find system function calls (pattern: $function_name(...))
+            let mut char_idx = 0;
+            while char_idx < line.len() {
+                if line[char_idx..].starts_with('$') {
+                    // Found potential system function
+                    if let Some(end_idx) = line[char_idx..].find('(') {
+                        let func_name_with_dollar = &line[char_idx..char_idx + end_idx];
+                        let func_name =
+                            func_name_with_dollar.trim().strip_prefix('$').unwrap_or("");
+
+                        // Check if it's a known system function
+                        if let Some(info) = get_system_function_info(func_name) {
+                            // Parse the parameters from the signature
+                            if let Some(params) = self.parse_parameters(&info.signature) {
+                                // Find the arguments in the actual function call
+                                let open_paren_pos = char_idx + end_idx;
+                                if let Some(close_paren) =
+                                    self.find_matching_paren(line, open_paren_pos)
+                                {
+                                    let args_str = &line[open_paren_pos + 1..close_paren];
+                                    let args: Vec<&str> = if args_str.trim().is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        args_str.split(',').map(|s| s.trim()).collect()
+                                    };
+
+                                    // Create inlay hints for each argument
+                                    let mut arg_offset = open_paren_pos + 1;
+                                    for (idx, (arg, param)) in
+                                        args.iter().zip(params.iter()).enumerate()
+                                    {
+                                        // Skip whitespace
+                                        while arg_offset < line.len()
+                                            && line
+                                                .chars()
+                                                .nth(arg_offset)
+                                                .map_or(false, |c| c.is_whitespace())
+                                        {
+                                            arg_offset += 1;
+                                        }
+
+                                        if arg_offset >= line.len() {
+                                            break;
+                                        }
+
+                                        // Extract parameter name from ParameterLabel
+                                        let param_name = match &param.label {
+                                            ParameterLabel::Simple(s) => {
+                                                // Extract just the parameter name (last word)
+                                                s.split_whitespace().last().unwrap_or("")
+                                            }
+                                            ParameterLabel::LabelOffsets(_) => "",
+                                        };
+
+                                        if !param_name.is_empty() {
+                                            hints.push(InlayHint {
+                                                position: Position {
+                                                    line: line_idx as u32,
+                                                    character: arg_offset as u32,
+                                                },
+                                                label: InlayHintLabel::String(format!(
+                                                    "{}:",
+                                                    param_name
+                                                )),
+                                                kind: Some(InlayHintKind::PARAMETER),
+                                                text_edits: None,
+                                                tooltip: None,
+                                                padding_left: None,
+                                                padding_right: Some(true),
+                                                data: None,
+                                            });
+                                        }
+
+                                        // Move past this argument
+                                        arg_offset += arg.len();
+                                        // Skip comma if not last argument
+                                        if idx < args.len() - 1 {
+                                            if let Some(comma_pos) = line[arg_offset..].find(',') {
+                                                arg_offset += comma_pos + 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        char_idx += end_idx + 1;
+                    } else {
+                        char_idx += 1;
+                    }
+                } else {
+                    char_idx += 1;
+                }
+            }
+        }
+
+        if hints.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hints))
         }
     }
 }
@@ -2329,6 +2576,628 @@ impl Backend {
                 }
             }
         }
+    }
+
+    // Helper methods for code completion
+    fn get_keyword_completions(&self) -> Vec<CompletionItem> {
+        let keywords = vec![
+            ("module", "module declaration", CompletionItemKind::KEYWORD),
+            (
+                "endmodule",
+                "end module declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("class", "class declaration", CompletionItemKind::KEYWORD),
+            (
+                "endclass",
+                "end class declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "function",
+                "function declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endfunction",
+                "end function declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("task", "task declaration", CompletionItemKind::KEYWORD),
+            (
+                "endtask",
+                "end task declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("begin", "begin block", CompletionItemKind::KEYWORD),
+            ("end", "end block", CompletionItemKind::KEYWORD),
+            ("if", "if statement", CompletionItemKind::KEYWORD),
+            ("else", "else statement", CompletionItemKind::KEYWORD),
+            ("for", "for loop", CompletionItemKind::KEYWORD),
+            ("while", "while loop", CompletionItemKind::KEYWORD),
+            ("case", "case statement", CompletionItemKind::KEYWORD),
+            ("endcase", "end case statement", CompletionItemKind::KEYWORD),
+            ("always", "always block", CompletionItemKind::KEYWORD),
+            (
+                "always_comb",
+                "combinational always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "always_ff",
+                "flip-flop always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "always_latch",
+                "latch always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("initial", "initial block", CompletionItemKind::KEYWORD),
+            (
+                "assign",
+                "continuous assignment",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("input", "input port", CompletionItemKind::KEYWORD),
+            ("output", "output port", CompletionItemKind::KEYWORD),
+            ("inout", "inout port", CompletionItemKind::KEYWORD),
+            ("wire", "wire declaration", CompletionItemKind::KEYWORD),
+            ("reg", "reg declaration", CompletionItemKind::KEYWORD),
+            ("logic", "logic declaration", CompletionItemKind::KEYWORD),
+            ("bit", "bit declaration", CompletionItemKind::KEYWORD),
+            ("byte", "byte declaration", CompletionItemKind::KEYWORD),
+            ("int", "int declaration", CompletionItemKind::KEYWORD),
+            (
+                "integer",
+                "integer declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("real", "real declaration", CompletionItemKind::KEYWORD),
+            ("time", "time declaration", CompletionItemKind::KEYWORD),
+            (
+                "parameter",
+                "parameter declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "localparam",
+                "local parameter declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("typedef", "type definition", CompletionItemKind::KEYWORD),
+            ("enum", "enumeration type", CompletionItemKind::KEYWORD),
+            ("struct", "structure type", CompletionItemKind::KEYWORD),
+            ("union", "union type", CompletionItemKind::KEYWORD),
+            (
+                "package",
+                "package declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endpackage",
+                "end package declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("import", "import statement", CompletionItemKind::KEYWORD),
+            (
+                "interface",
+                "interface declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endinterface",
+                "end interface declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("virtual", "virtual keyword", CompletionItemKind::KEYWORD),
+            ("extends", "class inheritance", CompletionItemKind::KEYWORD),
+            (
+                "implements",
+                "interface implementation",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("new", "constructor call", CompletionItemKind::KEYWORD),
+            ("return", "return statement", CompletionItemKind::KEYWORD),
+            ("void", "void type", CompletionItemKind::KEYWORD),
+            ("null", "null value", CompletionItemKind::KEYWORD),
+            (
+                "this",
+                "current object reference",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "super",
+                "parent class reference",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("static", "static member", CompletionItemKind::KEYWORD),
+            ("const", "constant declaration", CompletionItemKind::KEYWORD),
+            ("ref", "reference argument", CompletionItemKind::KEYWORD),
+            ("var", "variable type", CompletionItemKind::KEYWORD),
+            ("string", "string type", CompletionItemKind::KEYWORD),
+        ];
+
+        keywords
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("1_{}", label)), // Priority 1
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_system_function_completions(&self) -> Vec<CompletionItem> {
+        let system_functions = vec![
+            // Math functions
+            (
+                "sin",
+                "real $sin(real x)",
+                "Returns the sine of x (x in radians)",
+            ),
+            (
+                "cos",
+                "real $cos(real x)",
+                "Returns the cosine of x (x in radians)",
+            ),
+            (
+                "tan",
+                "real $tan(real x)",
+                "Returns the tangent of x (x in radians)",
+            ),
+            ("asin", "real $asin(real x)", "Returns the arc sine of x"),
+            ("acos", "real $acos(real x)", "Returns the arc cosine of x"),
+            ("atan", "real $atan(real x)", "Returns the arc tangent of x"),
+            (
+                "atan2",
+                "real $atan2(real y, real x)",
+                "Returns the arc tangent of y/x",
+            ),
+            (
+                "sinh",
+                "real $sinh(real x)",
+                "Returns the hyperbolic sine of x",
+            ),
+            (
+                "cosh",
+                "real $cosh(real x)",
+                "Returns the hyperbolic cosine of x",
+            ),
+            (
+                "tanh",
+                "real $tanh(real x)",
+                "Returns the hyperbolic tangent of x",
+            ),
+            (
+                "asinh",
+                "real $asinh(real x)",
+                "Returns the inverse hyperbolic sine of x",
+            ),
+            (
+                "acosh",
+                "real $acosh(real x)",
+                "Returns the inverse hyperbolic cosine of x",
+            ),
+            (
+                "atanh",
+                "real $atanh(real x)",
+                "Returns the inverse hyperbolic tangent of x",
+            ),
+            ("exp", "real $exp(real x)", "Returns e to the power of x"),
+            (
+                "ln",
+                "real $ln(real x)",
+                "Returns the natural logarithm of x",
+            ),
+            (
+                "log10",
+                "real $log10(real x)",
+                "Returns the base-10 logarithm of x",
+            ),
+            ("sqrt", "real $sqrt(real x)", "Returns the square root of x"),
+            (
+                "pow",
+                "real $pow(real x, real y)",
+                "Returns x to the power of y",
+            ),
+            (
+                "hypot",
+                "real $hypot(real x, real y)",
+                "Returns sqrt(x^2 + y^2)",
+            ),
+            (
+                "floor",
+                "real $floor(real x)",
+                "Returns the largest integer not greater than x",
+            ),
+            (
+                "ceil",
+                "real $ceil(real x)",
+                "Returns the smallest integer not less than x",
+            ),
+            (
+                "clog2",
+                "integer $clog2(integer value)",
+                "Returns the ceiling of log base 2 of value",
+            ),
+            // Display tasks
+            (
+                "display",
+                "task $display([list_of_arguments])",
+                "Displays the argument list and adds a newline",
+            ),
+            (
+                "write",
+                "task $write([list_of_arguments])",
+                "Displays the argument list without adding a newline",
+            ),
+            (
+                "monitor",
+                "task $monitor([list_of_arguments])",
+                "Continuously monitors and displays values when they change",
+            ),
+            // Simulation control
+            ("finish", "task $finish[(n)]", "Terminates the simulation"),
+            ("stop", "task $stop[(n)]", "Suspends the simulation"),
+            ("exit", "task $exit", "Terminates the simulation"),
+            // Time functions
+            (
+                "time",
+                "time $time",
+                "Returns the current simulation time as a 64-bit integer",
+            ),
+            (
+                "stime",
+                "int $stime",
+                "Returns the current simulation time as a 32-bit integer",
+            ),
+            (
+                "realtime",
+                "realtime $realtime",
+                "Returns the current simulation time as a real number",
+            ),
+            // Random number generation
+            (
+                "random",
+                "int $random[(seed)]",
+                "Returns a random 32-bit signed integer",
+            ),
+            (
+                "urandom",
+                "int $urandom[(seed)]",
+                "Returns a random 32-bit unsigned integer",
+            ),
+            (
+                "urandom_range",
+                "int $urandom_range(int maxval, int minval = 0)",
+                "Returns a random integer within the specified range",
+            ),
+            // Additional common system tasks
+            (
+                "error",
+                "task $error([list_of_arguments])",
+                "Displays an error message",
+            ),
+            (
+                "warning",
+                "task $warning([list_of_arguments])",
+                "Displays a warning message",
+            ),
+            (
+                "info",
+                "task $info([list_of_arguments])",
+                "Displays an info message",
+            ),
+            (
+                "fatal",
+                "task $fatal[(n), [list_of_arguments]]",
+                "Terminates simulation with a fatal error",
+            ),
+            (
+                "readmemh",
+                "task $readmemh(filename, memory_array)",
+                "Reads memory from hex file",
+            ),
+            (
+                "readmemb",
+                "task $readmemb(filename, memory_array)",
+                "Reads memory from binary file",
+            ),
+            (
+                "dumpfile",
+                "task $dumpfile(filename)",
+                "Specifies VCD dump file",
+            ),
+            ("dumpvars", "task $dumpvars", "Starts VCD dumping"),
+        ];
+
+        system_functions
+            .into_iter()
+            .map(|(label, detail, doc)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some(detail.to_string()),
+                documentation: Some(Documentation::String(doc.to_string())),
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("2_{}", label)), // Priority 2
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_preprocessor_completions(&self) -> Vec<CompletionItem> {
+        let directives = vec![
+            ("define", "Defines a macro", CompletionItemKind::KEYWORD),
+            ("undef", "Undefines a macro", CompletionItemKind::KEYWORD),
+            (
+                "ifdef",
+                "Conditional compilation (if defined)",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "ifndef",
+                "Conditional compilation (if not defined)",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "else",
+                "Conditional compilation else",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "elsif",
+                "Conditional compilation else if",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endif",
+                "End conditional compilation",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("include", "Include file", CompletionItemKind::KEYWORD),
+            ("timescale", "Set time scale", CompletionItemKind::KEYWORD),
+            (
+                "begin_keywords",
+                "Begin keyword version",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "end_keywords",
+                "End keyword version",
+                CompletionItemKind::KEYWORD,
+            ),
+        ];
+
+        directives
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("3_{}", label)), // Priority 3
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_member_completions(&self) -> Vec<CompletionItem> {
+        // Common class/struct member patterns
+        let members = vec![
+            ("new", "Constructor", CompletionItemKind::CONSTRUCTOR),
+            ("randomize", "Randomize object", CompletionItemKind::METHOD),
+            ("size", "Get size", CompletionItemKind::METHOD),
+            ("delete", "Delete element", CompletionItemKind::METHOD),
+            ("exists", "Check if exists", CompletionItemKind::METHOD),
+            ("first", "Get first element", CompletionItemKind::METHOD),
+            ("last", "Get last element", CompletionItemKind::METHOD),
+            ("next", "Get next element", CompletionItemKind::METHOD),
+            ("prev", "Get previous element", CompletionItemKind::METHOD),
+        ];
+
+        members
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("4_{}", label)), // Priority 4
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    async fn get_symbol_completions(&self) -> Vec<CompletionItem> {
+        let workspace_symbols = self.workspace_symbols.read().await;
+        let mut items = Vec::new();
+
+        for (name, symbols) in workspace_symbols.iter() {
+            if let Some(first_symbol) = symbols.first() {
+                let (kind, detail_prefix) = match first_symbol.symbol_type {
+                    SymbolType::Module => (CompletionItemKind::MODULE, "module"),
+                    SymbolType::Class => (CompletionItemKind::CLASS, "class"),
+                    SymbolType::Function => (CompletionItemKind::FUNCTION, "function"),
+                    SymbolType::Task => (CompletionItemKind::FUNCTION, "task"),
+                    SymbolType::Variable => (CompletionItemKind::VARIABLE, "variable"),
+                    SymbolType::Port => (CompletionItemKind::PROPERTY, "port"),
+                    SymbolType::Parameter => (CompletionItemKind::CONSTANT, "parameter"),
+                    SymbolType::Define => (CompletionItemKind::CONSTANT, "define"),
+                    SymbolType::Include => continue, // Skip include symbols
+                };
+
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    label_details: None,
+                    kind: Some(kind),
+                    detail: Some(format!("{} {}", detail_prefix, name)),
+                    documentation: None,
+                    deprecated: None,
+                    preselect: None,
+                    sort_text: Some(format!("5_{}", name)), // Priority 5
+                    filter_text: None,
+                    insert_text: None,
+                    insert_text_format: None,
+                    insert_text_mode: None,
+                    text_edit: None,
+                    additional_text_edits: None,
+                    command: None,
+                    commit_characters: None,
+                    data: None,
+                    tags: None,
+                });
+            }
+        }
+
+        items
+    }
+
+    // Helper method to extract function call info from text
+    fn extract_function_call_info(&self, text: &str) -> LspResult<(String, u32)> {
+        // Find the last opening parenthesis
+        let last_open_paren = text.rfind('(');
+        if last_open_paren.is_none() {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "No function call found",
+            ));
+        }
+
+        let paren_pos = last_open_paren.unwrap();
+        let before_paren = &text[..paren_pos].trim_end();
+
+        // Extract function name (may start with $)
+        let function_name = if let Some(name_start) =
+            before_paren.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        {
+            before_paren[name_start + 1..].trim()
+        } else {
+            before_paren.trim()
+        };
+
+        // Remove $ prefix if present for system functions
+        let clean_name = function_name.strip_prefix('$').unwrap_or(function_name);
+
+        // Count commas after the opening parenthesis to determine active parameter
+        let after_paren = &text[paren_pos + 1..];
+        let mut paren_depth = 0;
+        let mut active_parameter = 0u32;
+
+        for ch in after_paren.chars() {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => {
+                    if paren_depth == 0 {
+                        break;
+                    }
+                    paren_depth -= 1;
+                }
+                ',' if paren_depth == 0 => active_parameter += 1,
+                _ => {}
+            }
+        }
+
+        Ok((clean_name.to_string(), active_parameter))
+    }
+
+    // Helper method to parse parameters from a function signature
+    fn parse_parameters(&self, signature: &str) -> Option<Vec<ParameterInformation>> {
+        // Extract parameters from signature like "function real $pow(real x, real y)"
+        let start = signature.find('(')?;
+        let end = signature.rfind(')')?;
+        let params_str = &signature[start + 1..end];
+
+        if params_str.trim().is_empty() || params_str.trim() == "n" {
+            return None;
+        }
+
+        let params: Vec<ParameterInformation> = params_str
+            .split(',')
+            .map(|p| {
+                let param = p.trim();
+                ParameterInformation {
+                    label: ParameterLabel::Simple(param.to_string()),
+                    documentation: None,
+                }
+            })
+            .collect();
+
+        if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        }
+    }
+
+    // Helper method to find matching closing parenthesis
+    fn find_matching_paren(&self, text: &str, open_paren_pos: usize) -> Option<usize> {
+        let mut depth = 1;
+        let chars: Vec<char> = text.chars().collect();
+
+        for (offset, &ch) in chars.iter().enumerate().skip(open_paren_pos + 1) {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(offset);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 }
 
