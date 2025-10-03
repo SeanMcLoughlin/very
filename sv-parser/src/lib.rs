@@ -154,6 +154,7 @@ pub enum ModuleItem {
         data_type: String,
         signing: Option<String>,
         drive_strength: Option<DriveStrength>,
+        delay: Option<Delay>,
         range: Option<Range>,
         name: String,
         name_span: Span,
@@ -162,6 +163,7 @@ pub enum ModuleItem {
         span: Span,
     },
     Assignment {
+        delay: Option<Delay>,
         target: String,
         target_span: Span,
         expr: Expression,
@@ -328,6 +330,14 @@ pub enum UnpackedDimension {
 pub struct DriveStrength {
     pub strength0: String, // Strength for 0 value (e.g., "highz0", "strong0")
     pub strength1: String, // Strength for 1 value (e.g., "strong1", "pull1")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delay {
+    /// Simple delay: #10
+    Value(String),
+    /// Delay with expression: #(expr)
+    Expression(String), // For now, store as string; could be Expression later
 }
 
 #[derive(Debug, Clone, PartialEq)]

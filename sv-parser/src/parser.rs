@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, DriveStrength, Expression, ModuleItem,
-    ParseError, ParseErrorType, Port, PortDirection, ProceduralBlockType, Range, SingleParseError,
-    SourceLocation, SourceUnit, Statement, UnaryOp, UnpackedDimension,
+    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, Delay, DriveStrength, Expression,
+    ModuleItem, ParseError, ParseErrorType, Port, PortDirection, ProceduralBlockType, Range,
+    SingleParseError, SourceLocation, SourceUnit, Statement, UnaryOp, UnpackedDimension,
 };
 
 #[derive(Debug)]
@@ -912,16 +912,25 @@ impl SystemVerilogParser {
             .recover_with(skip_then_retry_until([';']))
             .padded_by(whitespace.clone());
 
+        // Delay specification: #10
+        // For now, only support simple numeric delays
+        let delay = just('#')
+            .ignore_then(text::digits(10))
+            .map(|val: String| Delay::Value(val))
+            .padded_by(whitespace.clone());
+
         // Assignment statement with error recovery
         let assignment = just("assign")
             .padded_by(whitespace.clone())
-            .ignore_then(identifier_with_span.clone())
+            .ignore_then(delay.clone().or_not())
+            .then(identifier_with_span.clone())
             .then_ignore(just('=').padded_by(whitespace.clone()))
             .then(expr.clone())
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(
-                |((target, target_span), expr), span: std::ops::Range<usize>| {
+                |((delay, (target, target_span)), expr), span: std::ops::Range<usize>| {
                     ModuleItem::Assignment {
+                        delay,
                         target: target.clone(),
                         target_span,
                         expr,
@@ -1057,6 +1066,7 @@ impl SystemVerilogParser {
         let builtin_var_decl = data_type
             .then(signing.clone().or_not())
             .then(drive_strength.clone().or_not())
+            .then(delay.clone().or_not())
             .then(range.clone().or_not())
             .then(
                 single_var_not_signing
@@ -1066,7 +1076,7 @@ impl SystemVerilogParser {
             )
             .then_ignore(just(';').padded_by(whitespace.clone()))
             .map_with_span(
-                |((((data_type, signing), drive_strength), range), vars),
+                |(((((data_type, signing), drive_strength), delay), range), vars),
                  span: std::ops::Range<usize>| {
                     let (name, name_span, unpacked_dimensions, initial_value) =
                         vars.into_iter().next().unwrap();
@@ -1074,6 +1084,7 @@ impl SystemVerilogParser {
                         data_type,
                         signing,
                         drive_strength,
+                        delay,
                         range,
                         name: name.clone(),
                         name_span,
@@ -1110,6 +1121,7 @@ impl SystemVerilogParser {
                         data_type,
                         signing: None,
                         drive_strength: None,
+                        delay: None,
                         range: None,
                         name,
                         name_span,
