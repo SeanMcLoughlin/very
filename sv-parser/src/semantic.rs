@@ -174,6 +174,11 @@ impl SemanticAnalyzer {
                     self.analyze_statement(action_stmt, expr_arena, stmt_arena);
                 }
             }
+            Statement::VariableDeclaration { initial_value, .. } => {
+                if let Some(expr_ref) = initial_value {
+                    self.analyze_expression_ref(*expr_ref, expr_arena);
+                }
+            }
         }
     }
 

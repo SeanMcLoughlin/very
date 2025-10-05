@@ -170,6 +170,7 @@ enum ParsedStatement {
     SystemCall {
         name: String,
         args: Vec<ParsedExpression>,
+        span: Span,
     },
     CaseStatement {
         modifier: Option<String>,
@@ -182,6 +183,13 @@ enum ParsedStatement {
     },
     ExpressionStatement {
         expr: ParsedExpression,
+    },
+    VariableDeclaration {
+        data_type: String,
+        name: String,
+        name_span: Span,
+        initial_value: Option<ParsedExpression>,
+        span: Span,
     },
 }
 
@@ -198,12 +206,12 @@ impl ParsedStatement {
                     span: (0, 0),
                 }
             }
-            ParsedStatement::SystemCall { name, args } => {
+            ParsedStatement::SystemCall { name, args, span } => {
                 let arg_refs = args.into_iter().map(|a| a.flatten(expr_arena)).collect();
                 Statement::SystemCall {
                     name,
                     args: arg_refs,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedStatement::CaseStatement {
@@ -239,6 +247,22 @@ impl ParsedStatement {
                 Statement::ExpressionStatement {
                     expr: expr_ref,
                     span: (0, 0),
+                }
+            }
+            ParsedStatement::VariableDeclaration {
+                data_type,
+                name,
+                name_span,
+                initial_value,
+                span,
+            } => {
+                let initial_value_ref = initial_value.map(|expr| expr.flatten(expr_arena));
+                Statement::VariableDeclaration {
+                    data_type,
+                    name,
+                    name_span,
+                    initial_value: initial_value_ref,
+                    span,
                 }
             }
         }
@@ -1131,11 +1155,13 @@ impl SystemVerilogParser {
                         .or_not()
                         .map(|args| args.unwrap_or_default()),
                 )
-                .map(|(name, arguments)| ParsedExpression::SystemFunctionCall {
-                    name,
-                    arguments,
-                    span: (0, 0),
-                });
+                .map_with_span(
+                    |(name, arguments), span| ParsedExpression::SystemFunctionCall {
+                        name,
+                        arguments,
+                        span: (span.start, span.end),
+                    },
+                );
 
             // New expression: new or new(args)
             let new_expr = text::keyword("new")
@@ -1516,7 +1542,11 @@ impl SystemVerilogParser {
                         .map(|args| args.unwrap_or_default()),
                 )
                 .then_ignore(just(';').padded_by(ws.clone()))
-                .map(|(name, args)| ParsedStatement::SystemCall { name, args });
+                .map_with_span(|(name, args), span| ParsedStatement::SystemCall {
+                    name,
+                    args,
+                    span: (span.start, span.end),
+                });
 
             // Case statement modifiers
             let case_modifier = choice((
@@ -1577,7 +1607,11 @@ impl SystemVerilogParser {
                                         .or_not()
                                         .map(|args| args.unwrap_or_default()),
                                 )
-                                .map(|(name, args)| ParsedStatement::SystemCall { name, args }),
+                                .map_with_span(|(name, args), span| ParsedStatement::SystemCall {
+                                    name,
+                                    args,
+                                    span: (span.start, span.end),
+                                }),
                         )
                         .or_not(),
                 )
@@ -1589,6 +1623,43 @@ impl SystemVerilogParser {
                     },
                 );
 
+            // Variable declaration statement: logic a = $tan(1);
+            let var_decl_stmt = choice((
+                text::keyword("logic").to("logic".to_string()),
+                text::keyword("bit").to("bit".to_string()),
+                text::keyword("int").to("int".to_string()),
+                text::keyword("byte").to("byte".to_string()),
+                text::keyword("reg").to("reg".to_string()),
+                text::keyword("integer").to("integer".to_string()),
+                text::keyword("time").to("time".to_string()),
+                text::keyword("shortint").to("shortint".to_string()),
+                text::keyword("longint").to("longint".to_string()),
+                text::keyword("real").to("real".to_string()),
+                text::keyword("realtime").to("realtime".to_string()),
+            ))
+            .padded_by(ws.clone())
+            .then(
+                identifier
+                    .clone()
+                    .map_with_span(|name, span| (name, (span.start, span.end))),
+            )
+            .then(
+                just('=')
+                    .padded_by(ws.clone())
+                    .ignore_then(expr.clone())
+                    .or_not(),
+            )
+            .then_ignore(just(';').padded_by(ws.clone()))
+            .map_with_span(|((data_type, (name, name_span)), initial_value), span| {
+                ParsedStatement::VariableDeclaration {
+                    data_type,
+                    name,
+                    name_span,
+                    initial_value,
+                    span: (span.start, span.end),
+                }
+            });
+
             // Expression statement (for function calls)
             let expr_stmt = expr
                 .clone()
@@ -1599,6 +1670,7 @@ impl SystemVerilogParser {
                 assert_property,
                 case_stmt,
                 system_call,
+                var_decl_stmt,
                 stmt_assignment,
                 expr_stmt,
             ))

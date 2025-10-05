@@ -399,6 +399,13 @@ pub enum Statement {
         action_block: Option<StmtRef>,
         span: Span,
     },
+    VariableDeclaration {
+        data_type: String,
+        name: String,
+        name_span: Span,
+        initial_value: Option<ExprRef>,
+        span: Span,
+    },
     // Placeholder for other statement types
 }
 

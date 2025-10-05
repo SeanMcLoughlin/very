@@ -1807,6 +1807,78 @@ impl Backend {
                     }
                 }
             }
+            ModuleItem::Assignment { target, expr, .. } => {
+                // Check target expression
+                let target_val = expr_arena.get(*target);
+                if let Some(hover) =
+                    self.find_hover_in_expression(target_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+                // Check value expression
+                let expr_val = expr_arena.get(*expr);
+                if let Some(hover) =
+                    self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            ModuleItem::VariableDeclaration { initial_value, .. } => {
+                // Check for system function calls in module-level variable initialization
+                if let Some(expr_ref) = initial_value {
+                    let expr_val = expr_arena.get(*expr_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
+            ModuleItem::ConcurrentAssertion { statement, .. } => {
+                // Check concurrent assertion statement
+                let stmt = stmt_arena.get(*statement);
+                if let Some(hover) =
+                    self.find_hover_in_statement(stmt, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            ModuleItem::GlobalClocking { clocking_event, .. } => {
+                // Check clocking event expression
+                let event_expr = expr_arena.get(*clocking_event);
+                if let Some(hover) =
+                    self.find_hover_in_expression(event_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            ModuleItem::ClassDeclaration { items, .. } => {
+                // Check class items for system function calls
+                for class_item in items {
+                    match class_item {
+                        sv_parser::ClassItem::Property { initial_value, .. } => {
+                            if let Some(expr_ref) = initial_value {
+                                let expr_val = expr_arena.get(*expr_ref);
+                                if let Some(hover) = self.find_hover_in_expression(
+                                    expr_val, expr_arena, content, position,
+                                ) {
+                                    return Some(hover);
+                                }
+                            }
+                        }
+                        sv_parser::ClassItem::Method { body, .. } => {
+                            for &stmt_ref in body {
+                                let stmt = stmt_arena.get(stmt_ref);
+                                if let Some(hover) = self
+                                    .find_hover_in_statement(stmt, expr_arena, content, position)
+                                {
+                                    return Some(hover);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         None
@@ -1850,8 +1922,15 @@ impl Backend {
                     }
                 }
             }
-            sv_parser::Statement::Assignment { expr, .. } => {
-                // Check if there's a system function call in the expression
+            sv_parser::Statement::Assignment { target, expr, .. } => {
+                // Check target expression (might contain system functions in array indices, etc.)
+                let target_val = expr_arena.get(*target);
+                if let Some(hover) =
+                    self.find_hover_in_expression(target_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+                // Check value expression
                 let expr_val = expr_arena.get(*expr);
                 if let Some(hover) =
                     self.find_hover_in_expression(expr_val, expr_arena, content, position)
@@ -1891,6 +1970,17 @@ impl Backend {
                 }
                 // TODO: Check action block if present - needs stmt_arena
                 let _ = action_block; // Silence unused warning for now
+            }
+            sv_parser::Statement::VariableDeclaration { initial_value, .. } => {
+                // Check if there's a system function call in the initializer
+                if let Some(expr_ref) = initial_value {
+                    let expr_val = expr_arena.get(*expr_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
             }
         }
         None
@@ -1976,6 +2066,39 @@ impl Backend {
                     self.find_hover_in_expression(object_expr, expr_arena, content, position)
                 {
                     return Some(hover);
+                }
+            }
+            Expression::New { arguments, .. } => {
+                // Check arguments of new expression
+                for arg_ref in arguments {
+                    let arg = expr_arena.get(*arg_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(arg, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
+            Expression::FunctionCall {
+                function,
+                arguments,
+                ..
+            } => {
+                // Check function expression
+                let func_expr = expr_arena.get(*function);
+                if let Some(hover) =
+                    self.find_hover_in_expression(func_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+                // Check arguments
+                for arg_ref in arguments {
+                    let arg = expr_arena.get(*arg_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(arg, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
                 }
             }
             _ => {}
@@ -2248,6 +2371,14 @@ impl Backend {
                     // TODO: Need stmt_arena to dereference action_stmt_ref
                     let _ = action_stmt_ref; // Silence unused warning for now
                                              // self.extract_symbols_from_statement(action_stmt, expr_arena, content, uri, symbols);
+                }
+            }
+            Statement::VariableDeclaration { initial_value, .. } => {
+                if let Some(expr_ref) = initial_value {
+                    let expr_val = expr_arena.get(*expr_ref);
+                    self.extract_symbols_from_expression(
+                        expr_val, expr_arena, content, uri, symbols,
+                    );
                 }
             }
         }

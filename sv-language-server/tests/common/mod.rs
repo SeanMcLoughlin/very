@@ -34,17 +34,10 @@ pub fn test_uri(path: &str) -> Url {
     Url::parse(&format!("file://{}", path)).unwrap()
 }
 
-/// Helper to create a test position
-#[allow(dead_code)]
-pub fn test_position(line: u32, character: u32) -> Position {
-    Position { line, character }
-}
-
-/// Helper to create a test range
-#[allow(dead_code)]
-pub fn test_range(start_line: u32, start_char: u32, end_line: u32, end_char: u32) -> Range {
-    Range {
-        start: test_position(start_line, start_char),
-        end: test_position(end_line, end_char),
+/// Helper to create a test position (zero-based row and column)
+pub fn test_position(row: u32, col: u32) -> Position {
+    Position {
+        line: row,
+        character: col,
     }
 }

@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
