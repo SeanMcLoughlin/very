@@ -42,9 +42,10 @@ fn test_empty_module_structure() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
+    let item = result.module_item_arena.get(result.items[0]);
     if let ModuleItem::ModuleDeclaration {
         name, ports, items, ..
-    } = &result.items[0]
+    } = item
     {
         assert_eq!(name, "empty");
         assert_eq!(ports.len(), 0);
@@ -64,9 +65,10 @@ fn test_module_with_ports_structure() {
 
     let result = parser.parse_content(&content).unwrap();
 
+    let item = result.module_item_arena.get(result.items[0]);
     if let ModuleItem::ModuleDeclaration {
         name, ports, items, ..
-    } = &result.items[0]
+    } = item
     {
         assert_eq!(name, "test");
         assert_eq!(ports.len(), 2);
@@ -94,7 +96,8 @@ fn test_module_with_array_ports_structure() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { name, ports, .. } = item {
         assert_eq!(name, "test");
         assert_eq!(ports.len(), 2);
 
@@ -133,13 +136,15 @@ fn test_multiple_modules_structure() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 2);
 
-    if let ModuleItem::ModuleDeclaration { name, .. } = &result.items[0] {
+    let item0 = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { name, .. } = item0 {
         assert_eq!(name, "first");
     } else {
         panic!("Expected first module");
     }
 
-    if let ModuleItem::ModuleDeclaration { name, ports, .. } = &result.items[1] {
+    let item1 = result.module_item_arena.get(result.items[1]);
+    if let ModuleItem::ModuleDeclaration { name, ports, .. } = item1 {
         assert_eq!(name, "second");
         assert_eq!(ports.len(), 1);
     } else {

@@ -20,9 +20,10 @@ fn test_full_pipeline_simple_module() {
     let result = parser.parse_file(&file_path).unwrap();
 
     assert_eq!(result.items.len(), 1);
+    let item = result.module_item_arena.get(result.items[0]);
     let ModuleItem::ModuleDeclaration {
         name, ports, items, ..
-    } = &result.items[0]
+    } = item
     else {
         panic!("Expected module declaration");
     };

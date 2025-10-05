@@ -7,7 +7,9 @@
 //! - Type checking
 //! - Scope resolution
 
-use crate::{Expression, ModuleItem, SourceUnit, Statement};
+use crate::{
+    ExprArena, ExprRef, Expression, ModuleItem, ModuleItemArena, SourceUnit, Statement, StmtArena,
+};
 
 /// Represents a semantic error found during analysis
 #[derive(Debug, Clone, PartialEq)]
@@ -45,43 +47,60 @@ impl SemanticAnalyzer {
     pub fn analyze(&mut self, source_unit: &SourceUnit) -> Vec<SemanticError> {
         self.errors.clear();
 
-        // Walk the AST and validate
-        for item in &source_unit.items {
-            self.analyze_module_item(item);
+        // Walk the AST and validate - items is now Vec<ModuleItemRef>
+        for item_ref in &source_unit.items {
+            let item = source_unit.module_item_arena.get(*item_ref);
+            self.analyze_module_item(
+                item,
+                &source_unit.expr_arena,
+                &source_unit.stmt_arena,
+                &source_unit.module_item_arena,
+            );
         }
 
         self.errors.clone()
     }
 
     /// Analyze a module item
-    fn analyze_module_item(&mut self, item: &ModuleItem) {
+    fn analyze_module_item(
+        &mut self,
+        item: &ModuleItem,
+        expr_arena: &ExprArena,
+        stmt_arena: &StmtArena,
+        module_item_arena: &ModuleItemArena,
+    ) {
         match item {
             ModuleItem::ModuleDeclaration { items, .. } => {
-                // Recursively analyze nested items
-                for sub_item in items {
-                    self.analyze_module_item(sub_item);
+                // Recursively analyze nested items - items are now refs into the arena
+                for item_ref in items {
+                    let sub_item = module_item_arena.get(*item_ref);
+                    self.analyze_module_item(sub_item, expr_arena, stmt_arena, module_item_arena);
                 }
             }
             ModuleItem::ProceduralBlock { statements, .. } => {
-                for statement in statements {
-                    self.analyze_statement(statement);
+                // statements is now Vec<StmtRef>
+                for stmt_ref in statements {
+                    let statement = stmt_arena.get(*stmt_ref);
+                    self.analyze_statement(statement, expr_arena, stmt_arena);
                 }
             }
             ModuleItem::VariableDeclaration {
                 initial_value: Some(expr),
                 ..
             } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             ModuleItem::Assignment { expr, .. } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             ModuleItem::ConcurrentAssertion { statement, .. } => {
-                self.analyze_statement(statement);
+                // statement is now StmtRef
+                let stmt = stmt_arena.get(*statement);
+                self.analyze_statement(stmt, expr_arena, stmt_arena);
             }
             ModuleItem::ClassDeclaration { items, .. } => {
                 for class_item in items {
-                    self.analyze_class_item(class_item);
+                    self.analyze_class_item(class_item, expr_arena, stmt_arena);
                 }
             }
             _ => {}
@@ -89,17 +108,24 @@ impl SemanticAnalyzer {
     }
 
     /// Analyze a class item
-    fn analyze_class_item(&mut self, item: &crate::ClassItem) {
+    fn analyze_class_item(
+        &mut self,
+        item: &crate::ClassItem,
+        expr_arena: &ExprArena,
+        stmt_arena: &StmtArena,
+    ) {
         match item {
             crate::ClassItem::Property {
                 initial_value: Some(expr),
                 ..
             } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             crate::ClassItem::Method { body, .. } => {
-                for statement in body {
-                    self.analyze_statement(statement);
+                // body is now Vec<StmtRef>
+                for stmt_ref in body {
+                    let statement = stmt_arena.get(*stmt_ref);
+                    self.analyze_statement(statement, expr_arena, stmt_arena);
                 }
             }
             _ => {}
@@ -107,10 +133,15 @@ impl SemanticAnalyzer {
     }
 
     /// Analyze a statement
-    fn analyze_statement(&mut self, statement: &Statement) {
+    fn analyze_statement(
+        &mut self,
+        statement: &Statement,
+        expr_arena: &ExprArena,
+        stmt_arena: &StmtArena,
+    ) {
         match statement {
             Statement::Assignment { expr, .. } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             Statement::SystemCall { name, args, span } => {
                 // Validate system task name
@@ -123,30 +154,32 @@ impl SemanticAnalyzer {
                 }
                 // Analyze arguments
                 for arg in args {
-                    self.analyze_expression(arg);
+                    self.analyze_expression_ref(*arg, expr_arena);
                 }
             }
             Statement::CaseStatement { expr, .. } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             Statement::ExpressionStatement { expr, .. } => {
-                self.analyze_expression(expr);
+                self.analyze_expression_ref(*expr, expr_arena);
             }
             Statement::AssertProperty {
                 property_expr,
                 action_block,
                 ..
             } => {
-                self.analyze_expression(property_expr);
-                if let Some(action) = action_block {
-                    self.analyze_statement(action);
+                self.analyze_expression_ref(*property_expr, expr_arena);
+                if let Some(action_ref) = action_block {
+                    let action_stmt = stmt_arena.get(*action_ref);
+                    self.analyze_statement(action_stmt, expr_arena, stmt_arena);
                 }
             }
         }
     }
 
-    /// Analyze an expression
-    fn analyze_expression(&mut self, expr: &Expression) {
+    /// Analyze an expression reference
+    fn analyze_expression_ref(&mut self, expr_ref: ExprRef, arena: &ExprArena) {
+        let expr = arena.get(expr_ref);
         match expr {
             Expression::SystemFunctionCall {
                 name,
@@ -164,37 +197,37 @@ impl SemanticAnalyzer {
                 }
                 // Analyze arguments
                 for arg in arguments {
-                    self.analyze_expression(arg);
+                    self.analyze_expression_ref(*arg, arena);
                 }
             }
             Expression::Binary { left, right, .. } => {
-                self.analyze_expression(left);
-                self.analyze_expression(right);
+                self.analyze_expression_ref(*left, arena);
+                self.analyze_expression_ref(*right, arena);
             }
             Expression::Unary { operand, .. } => {
-                self.analyze_expression(operand);
+                self.analyze_expression_ref(*operand, arena);
             }
             Expression::MacroUsage { arguments, .. } => {
                 for arg in arguments {
-                    self.analyze_expression(arg);
+                    self.analyze_expression_ref(*arg, arena);
                 }
             }
             Expression::New { arguments, .. } => {
                 for arg in arguments {
-                    self.analyze_expression(arg);
+                    self.analyze_expression_ref(*arg, arena);
                 }
             }
             Expression::MemberAccess { object, .. } => {
-                self.analyze_expression(object);
+                self.analyze_expression_ref(*object, arena);
             }
             Expression::FunctionCall {
                 function,
                 arguments,
                 ..
             } => {
-                self.analyze_expression(function);
+                self.analyze_expression_ref(*function, arena);
                 for arg in arguments {
-                    self.analyze_expression(arg);
+                    self.analyze_expression_ref(*arg, arena);
                 }
             }
             _ => {}

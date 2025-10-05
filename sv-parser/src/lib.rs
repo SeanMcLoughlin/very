@@ -129,9 +129,120 @@ pub struct ParseResult {
 /// Span represents a byte range in the source code (start, end)
 pub type Span = (usize, usize);
 
+/// ExprRef is an index into the ExprArena
+pub type ExprRef = u32;
+
+/// Arena for storing all Expression nodes in a flat array
+/// This avoids stack overflow from deeply nested recursive structures
+#[derive(Debug, Clone)]
+pub struct ExprArena {
+    pub nodes: Vec<Expression>,
+}
+
+impl ExprArena {
+    pub fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub fn alloc(&mut self, expr: Expression) -> ExprRef {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(expr);
+        idx
+    }
+
+    pub fn get(&self, idx: ExprRef) -> &Expression {
+        &self.nodes[idx as usize]
+    }
+
+    pub fn get_mut(&mut self, idx: ExprRef) -> &mut Expression {
+        &mut self.nodes[idx as usize]
+    }
+}
+
+impl Default for ExprArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// StmtRef is an index into the StmtArena
+pub type StmtRef = u32;
+
+/// Arena for storing all Statement nodes in a flat array
+/// This avoids stack overflow from deeply nested recursive structures
+#[derive(Debug, Clone)]
+pub struct StmtArena {
+    pub nodes: Vec<Statement>,
+}
+
+impl StmtArena {
+    pub fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub fn alloc(&mut self, stmt: Statement) -> StmtRef {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(stmt);
+        idx
+    }
+
+    pub fn get(&self, idx: StmtRef) -> &Statement {
+        &self.nodes[idx as usize]
+    }
+
+    pub fn get_mut(&mut self, idx: StmtRef) -> &mut Statement {
+        &mut self.nodes[idx as usize]
+    }
+}
+
+impl Default for StmtArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// ModuleItemRef is an index into the ModuleItemArena
+pub type ModuleItemRef = u32;
+
+/// Arena for storing all ModuleItem nodes in a flat array
+/// This avoids stack overflow from deeply nested module structures
+#[derive(Debug, Clone)]
+pub struct ModuleItemArena {
+    pub nodes: Vec<ModuleItem>,
+}
+
+impl ModuleItemArena {
+    pub fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub fn alloc(&mut self, item: ModuleItem) -> ModuleItemRef {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(item);
+        idx
+    }
+
+    pub fn get(&self, idx: ModuleItemRef) -> &ModuleItem {
+        &self.nodes[idx as usize]
+    }
+
+    pub fn get_mut(&mut self, idx: ModuleItemRef) -> &mut ModuleItem {
+        &mut self.nodes[idx as usize]
+    }
+}
+
+impl Default for ModuleItemArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SourceUnit {
-    pub items: Vec<ModuleItem>,
+    pub items: Vec<ModuleItemRef>,
+    pub expr_arena: ExprArena,
+    pub stmt_arena: StmtArena,
+    pub module_item_arena: ModuleItemArena,
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +251,7 @@ pub enum ModuleItem {
         name: String,
         name_span: Span,
         ports: Vec<Port>,
-        items: Vec<ModuleItem>,
+        items: Vec<ModuleItemRef>,
         span: Span,
     },
     PortDeclaration {
@@ -159,19 +270,18 @@ pub enum ModuleItem {
         name: String,
         name_span: Span,
         unpacked_dimensions: Vec<UnpackedDimension>,
-        initial_value: Option<Expression>,
+        initial_value: Option<ExprRef>,
         span: Span,
     },
     Assignment {
         delay: Option<Delay>,
-        target: String,
-        target_span: Span,
-        expr: Expression,
+        target: ExprRef,
+        expr: ExprRef,
         span: Span,
     },
     ProceduralBlock {
         block_type: ProceduralBlockType,
-        statements: Vec<Statement>,
+        statements: Vec<StmtRef>,
         span: Span,
     },
     DefineDirective {
@@ -195,13 +305,13 @@ pub enum ModuleItem {
         span: Span,
     },
     ConcurrentAssertion {
-        statement: Statement,
+        statement: StmtRef,
         span: Span,
     },
     GlobalClocking {
         identifier: Option<String>,
         identifier_span: Option<Span>,
-        clocking_event: Expression, // The event expression like @(posedge clk)
+        clocking_event: ExprRef, // The event expression like @(posedge clk)
         end_label: Option<String>,
         span: Span,
     },
@@ -215,7 +325,7 @@ pub enum ClassItem {
         name: String,
         name_span: Span,
         unpacked_dimensions: Vec<UnpackedDimension>,
-        initial_value: Option<Expression>,
+        initial_value: Option<ExprRef>,
         span: Span,
     },
     Method {
@@ -224,7 +334,7 @@ pub enum ClassItem {
         name: String,
         name_span: Span,
         parameters: Vec<String>, // simplified for now
-        body: Vec<Statement>,
+        body: Vec<StmtRef>,
         span: Span,
     },
 }
@@ -264,30 +374,29 @@ pub enum AssignmentOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Assignment {
-        target: String,
-        target_span: Span,
+        target: ExprRef,
         op: AssignmentOp,
-        expr: Expression,
+        expr: ExprRef,
         span: Span,
     },
     SystemCall {
         name: String,
-        args: Vec<Expression>,
+        args: Vec<ExprRef>,
         span: Span,
     },
     CaseStatement {
         modifier: Option<String>, // priority, unique, or unique0
         case_type: String,        // case, casex, or casez
-        expr: Expression,
+        expr: ExprRef,
         span: Span,
     },
     ExpressionStatement {
-        expr: Expression,
+        expr: ExprRef,
         span: Span,
     },
     AssertProperty {
-        property_expr: Expression,
-        action_block: Option<Box<Statement>>,
+        property_expr: ExprRef,
+        action_block: Option<StmtRef>,
         span: Span,
     },
     // Placeholder for other statement types
@@ -347,39 +456,39 @@ pub enum Expression {
     StringLiteral(String, Span),
     Binary {
         op: BinaryOp,
-        left: Box<Expression>,
-        right: Box<Expression>,
+        left: ExprRef,
+        right: ExprRef,
         span: Span,
     },
     Unary {
         op: UnaryOp,
-        operand: Box<Expression>,
+        operand: ExprRef,
         span: Span,
     },
     MacroUsage {
         name: String,
         name_span: Span,
-        arguments: Vec<Expression>, // arguments if it's a parameterized macro
+        arguments: Vec<ExprRef>,
         span: Span,
     },
     SystemFunctionCall {
         name: String,
-        arguments: Vec<Expression>,
+        arguments: Vec<ExprRef>,
         span: Span,
     },
     New {
-        arguments: Vec<Expression>,
+        arguments: Vec<ExprRef>,
         span: Span,
     },
     MemberAccess {
-        object: Box<Expression>,
+        object: ExprRef,
         member: String,
         member_span: Span,
         span: Span,
     },
     FunctionCall {
-        function: Box<Expression>, // Can be Identifier or MemberAccess
-        arguments: Vec<Expression>,
+        function: ExprRef,
+        arguments: Vec<ExprRef>,
         span: Span,
     },
 }

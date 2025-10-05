@@ -4,14 +4,524 @@ use std::path::{Path, PathBuf};
 
 use crate::preprocessor::Preprocessor;
 use crate::{
-    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, Delay, DriveStrength, Expression,
-    ModuleItem, ParseError, ParseErrorType, Port, PortDirection, ProceduralBlockType, Range,
-    SingleParseError, SourceLocation, SourceUnit, Statement, UnaryOp, UnpackedDimension,
+    AssignmentOp, BinaryOp, ClassItem, ClassQualifier, Delay, DriveStrength, ExprArena, ExprRef,
+    Expression, ModuleItem, ModuleItemArena, ModuleItemRef, ParseError, ParseErrorType, Port,
+    PortDirection, ProceduralBlockType, Range, SingleParseError, SourceUnit, Span, Statement,
+    StmtArena, StmtRef, UnaryOp, UnpackedDimension,
 };
+
+/// Temporary expression type used during parsing with Box-based recursion
+/// After parsing, this gets flattened into Expression + ExprArena
+#[derive(Clone, PartialEq)]
+enum ParsedExpression {
+    Identifier(String, Span),
+    Number(String, Span),
+    StringLiteral(String, Span),
+    Binary {
+        op: BinaryOp,
+        left: Box<ParsedExpression>,
+        right: Box<ParsedExpression>,
+        span: Span,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<ParsedExpression>,
+        span: Span,
+    },
+    #[allow(dead_code)]
+    MacroUsage {
+        name: String,
+        name_span: Span,
+        arguments: Vec<ParsedExpression>,
+        span: Span,
+    },
+    SystemFunctionCall {
+        name: String,
+        arguments: Vec<ParsedExpression>,
+        span: Span,
+    },
+    New {
+        arguments: Vec<ParsedExpression>,
+        span: Span,
+    },
+    MemberAccess {
+        object: Box<ParsedExpression>,
+        member: String,
+        member_span: Span,
+        span: Span,
+    },
+    FunctionCall {
+        function: Box<ParsedExpression>,
+        arguments: Vec<ParsedExpression>,
+        span: Span,
+    },
+}
+
+impl ParsedExpression {
+    /// Flatten this expression tree into an arena and return the root ExprRef
+    fn flatten(self, arena: &mut ExprArena) -> ExprRef {
+        match self {
+            ParsedExpression::Identifier(name, span) => {
+                arena.alloc(Expression::Identifier(name, span))
+            }
+            ParsedExpression::Number(num, span) => arena.alloc(Expression::Number(num, span)),
+            ParsedExpression::StringLiteral(s, span) => {
+                arena.alloc(Expression::StringLiteral(s, span))
+            }
+            ParsedExpression::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => {
+                let left_ref = left.flatten(arena);
+                let right_ref = right.flatten(arena);
+                arena.alloc(Expression::Binary {
+                    op,
+                    left: left_ref,
+                    right: right_ref,
+                    span,
+                })
+            }
+            ParsedExpression::Unary { op, operand, span } => {
+                let operand_ref = operand.flatten(arena);
+                arena.alloc(Expression::Unary {
+                    op,
+                    operand: operand_ref,
+                    span,
+                })
+            }
+            ParsedExpression::MacroUsage {
+                name,
+                name_span,
+                arguments,
+                span,
+            } => {
+                let arg_refs: Vec<ExprRef> =
+                    arguments.into_iter().map(|a| a.flatten(arena)).collect();
+                arena.alloc(Expression::MacroUsage {
+                    name,
+                    name_span,
+                    arguments: arg_refs,
+                    span,
+                })
+            }
+            ParsedExpression::SystemFunctionCall {
+                name,
+                arguments,
+                span,
+            } => {
+                let arg_refs: Vec<ExprRef> =
+                    arguments.into_iter().map(|a| a.flatten(arena)).collect();
+                arena.alloc(Expression::SystemFunctionCall {
+                    name,
+                    arguments: arg_refs,
+                    span,
+                })
+            }
+            ParsedExpression::New { arguments, span } => {
+                let arg_refs: Vec<ExprRef> =
+                    arguments.into_iter().map(|a| a.flatten(arena)).collect();
+                arena.alloc(Expression::New {
+                    arguments: arg_refs,
+                    span,
+                })
+            }
+            ParsedExpression::MemberAccess {
+                object,
+                member,
+                member_span,
+                span,
+            } => {
+                let object_ref = object.flatten(arena);
+                arena.alloc(Expression::MemberAccess {
+                    object: object_ref,
+                    member,
+                    member_span,
+                    span,
+                })
+            }
+            ParsedExpression::FunctionCall {
+                function,
+                arguments,
+                span,
+            } => {
+                let function_ref = function.flatten(arena);
+                let arg_refs: Vec<ExprRef> =
+                    arguments.into_iter().map(|a| a.flatten(arena)).collect();
+                arena.alloc(Expression::FunctionCall {
+                    function: function_ref,
+                    arguments: arg_refs,
+                    span,
+                })
+            }
+        }
+    }
+}
+
+/// Temporary statement that holds ParsedExpressions during parsing
+#[derive(Clone)]
+enum ParsedStatement {
+    Assignment {
+        target: ParsedExpression,
+        op: AssignmentOp,
+        expr: ParsedExpression,
+    },
+    SystemCall {
+        name: String,
+        args: Vec<ParsedExpression>,
+    },
+    CaseStatement {
+        modifier: Option<String>,
+        case_type: String,
+        expr: ParsedExpression,
+    },
+    AssertProperty {
+        property_expr: ParsedExpression,
+        action_block: Option<Box<ParsedStatement>>,
+    },
+    ExpressionStatement {
+        expr: ParsedExpression,
+    },
+}
+
+impl ParsedStatement {
+    fn flatten(self, expr_arena: &mut ExprArena, _stmt_arena: &mut StmtArena) -> Statement {
+        match self {
+            ParsedStatement::Assignment { target, op, expr } => {
+                let target_ref = target.flatten(expr_arena);
+                let expr_ref = expr.flatten(expr_arena);
+                Statement::Assignment {
+                    target: target_ref,
+                    op,
+                    expr: expr_ref,
+                    span: (0, 0),
+                }
+            }
+            ParsedStatement::SystemCall { name, args } => {
+                let arg_refs = args.into_iter().map(|a| a.flatten(expr_arena)).collect();
+                Statement::SystemCall {
+                    name,
+                    args: arg_refs,
+                    span: (0, 0),
+                }
+            }
+            ParsedStatement::CaseStatement {
+                modifier,
+                case_type,
+                expr,
+            } => {
+                let expr_ref = expr.flatten(expr_arena);
+                Statement::CaseStatement {
+                    modifier,
+                    case_type,
+                    expr: expr_ref,
+                    span: (0, 0),
+                }
+            }
+            ParsedStatement::AssertProperty {
+                property_expr,
+                action_block,
+            } => {
+                let property_ref = property_expr.flatten(expr_arena);
+                let action_ref = action_block.map(|stmt| {
+                    let flattened = stmt.flatten(expr_arena, _stmt_arena);
+                    _stmt_arena.alloc(flattened)
+                });
+                Statement::AssertProperty {
+                    property_expr: property_ref,
+                    action_block: action_ref,
+                    span: (0, 0),
+                }
+            }
+            ParsedStatement::ExpressionStatement { expr } => {
+                let expr_ref = expr.flatten(expr_arena);
+                Statement::ExpressionStatement {
+                    expr: expr_ref,
+                    span: (0, 0),
+                }
+            }
+        }
+    }
+}
+
+/// Temporary class item that holds ParsedExpressions during parsing
+#[derive(Clone)]
+enum ParsedClassItem {
+    Property {
+        qualifier: Option<ClassQualifier>,
+        data_type: String,
+        name: String,
+        unpacked_dimensions: Vec<UnpackedDimension>,
+        initial_value: Option<ParsedExpression>,
+    },
+    Method {
+        qualifier: Option<ClassQualifier>,
+        return_type: Option<String>,
+        name: String,
+        parameters: Vec<String>,
+        body: Vec<ParsedStatement>,
+    },
+}
+
+impl ParsedClassItem {
+    fn flatten(self, expr_arena: &mut ExprArena, stmt_arena: &mut StmtArena) -> ClassItem {
+        match self {
+            ParsedClassItem::Property {
+                qualifier,
+                data_type,
+                name,
+                unpacked_dimensions,
+                initial_value,
+            } => ClassItem::Property {
+                qualifier,
+                data_type,
+                name,
+                name_span: (0, 0),
+                unpacked_dimensions,
+                initial_value: initial_value.map(|e| e.flatten(expr_arena)),
+                span: (0, 0),
+            },
+            ParsedClassItem::Method {
+                qualifier,
+                return_type,
+                name,
+                parameters,
+                body,
+            } => {
+                let body_refs: Vec<StmtRef> = body
+                    .into_iter()
+                    .map(|s| {
+                        let stmt = s.flatten(expr_arena, stmt_arena);
+                        stmt_arena.alloc(stmt)
+                    })
+                    .collect();
+                ClassItem::Method {
+                    qualifier,
+                    return_type,
+                    name,
+                    name_span: (0, 0),
+                    parameters,
+                    body: body_refs,
+                    span: (0, 0),
+                }
+            }
+        }
+    }
+}
+
+/// Temporary module item that holds ParsedExpressions during parsing
+#[derive(Clone)]
+enum ParsedModuleItem {
+    ModuleDeclaration {
+        name: String,
+        ports: Vec<Port>,
+        items: Vec<ParsedModuleItem>,
+    },
+    VariableDeclaration {
+        data_type: String,
+        signing: Option<String>,
+        drive_strength: Option<DriveStrength>,
+        delay: Option<Delay>,
+        range: Option<Range>,
+        name: String,
+        unpacked_dimensions: Vec<UnpackedDimension>,
+        initial_value: Option<ParsedExpression>,
+    },
+    Assignment {
+        delay: Option<Delay>,
+        target: ParsedExpression,
+        expr: ParsedExpression,
+    },
+    ProceduralBlock {
+        block_type: ProceduralBlockType,
+        statements: Vec<ParsedStatement>,
+    },
+    ClassDeclaration {
+        name: String,
+        extends: Option<String>,
+        items: Vec<ParsedClassItem>,
+    },
+    PortDeclaration {
+        direction: PortDirection,
+        port_type: String,
+        name: String,
+    },
+    DefineDirective {
+        name: String,
+        parameters: Vec<String>,
+        value: String,
+    },
+    IncludeDirective {
+        path: String,
+    },
+    ConcurrentAssertion {
+        statement: ParsedStatement,
+    },
+    GlobalClocking {
+        identifier: Option<String>,
+        clocking_event: ParsedExpression,
+        end_label: Option<String>,
+    },
+}
+
+impl ParsedModuleItem {
+    /// Flatten this parsed module item into a real ModuleItem + arena
+    fn flatten(
+        self,
+        expr_arena: &mut ExprArena,
+        stmt_arena: &mut StmtArena,
+        module_item_arena: &mut ModuleItemArena,
+    ) -> ModuleItem {
+        match self {
+            ParsedModuleItem::ModuleDeclaration { name, ports, items } => {
+                // First flatten all child items into ModuleItems
+                let flattened_items: Vec<ModuleItem> = items
+                    .into_iter()
+                    .map(|item| item.flatten(expr_arena, stmt_arena, module_item_arena))
+                    .collect();
+
+                // Then allocate them in the arena and collect their refs
+                let item_refs: Vec<ModuleItemRef> = flattened_items
+                    .into_iter()
+                    .map(|item| module_item_arena.alloc(item))
+                    .collect();
+
+                ModuleItem::ModuleDeclaration {
+                    name,
+                    name_span: (0, 0),
+                    ports,
+                    items: item_refs,
+                    span: (0, 0),
+                }
+            }
+            ParsedModuleItem::VariableDeclaration {
+                data_type,
+                signing,
+                drive_strength,
+                delay,
+                range,
+                name,
+                unpacked_dimensions,
+                initial_value,
+            } => ModuleItem::VariableDeclaration {
+                data_type,
+                signing,
+                drive_strength,
+                delay,
+                range,
+                name,
+                name_span: (0, 0),
+                unpacked_dimensions,
+                initial_value: initial_value.map(|e| e.flatten(expr_arena)),
+                span: (0, 0),
+            },
+            ParsedModuleItem::Assignment {
+                delay,
+                target,
+                expr,
+            } => {
+                let target_ref = target.flatten(expr_arena);
+                let expr_ref = expr.flatten(expr_arena);
+                ModuleItem::Assignment {
+                    delay,
+                    target: target_ref,
+                    expr: expr_ref,
+                    span: (0, 0),
+                }
+            }
+            ParsedModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+            } => {
+                let statement_refs: Vec<StmtRef> = statements
+                    .into_iter()
+                    .map(|s| {
+                        let stmt = s.flatten(expr_arena, stmt_arena);
+                        stmt_arena.alloc(stmt)
+                    })
+                    .collect();
+                ModuleItem::ProceduralBlock {
+                    block_type,
+                    statements: statement_refs,
+                    span: (0, 0),
+                }
+            }
+            ParsedModuleItem::ClassDeclaration {
+                name,
+                extends,
+                items,
+            } => {
+                let flattened_items: Vec<ClassItem> = items
+                    .into_iter()
+                    .map(|item| item.flatten(expr_arena, stmt_arena))
+                    .collect();
+                ModuleItem::ClassDeclaration {
+                    name,
+                    name_span: (0, 0),
+                    extends,
+                    items: flattened_items,
+                    span: (0, 0),
+                }
+            }
+            ParsedModuleItem::PortDeclaration {
+                direction,
+                port_type,
+                name,
+            } => ModuleItem::PortDeclaration {
+                direction,
+                port_type,
+                name,
+                name_span: (0, 0),
+                span: (0, 0),
+            },
+            ParsedModuleItem::DefineDirective {
+                name,
+                parameters,
+                value,
+            } => ModuleItem::DefineDirective {
+                name,
+                name_span: (0, 0),
+                parameters,
+                value,
+                span: (0, 0),
+            },
+            ParsedModuleItem::IncludeDirective { path } => ModuleItem::IncludeDirective {
+                path,
+                path_span: (0, 0),
+                resolved_path: None,
+                span: (0, 0),
+            },
+            ParsedModuleItem::ConcurrentAssertion { statement } => {
+                let stmt = statement.flatten(expr_arena, stmt_arena);
+                let stmt_ref = stmt_arena.alloc(stmt);
+                ModuleItem::ConcurrentAssertion {
+                    statement: stmt_ref,
+                    span: (0, 0),
+                }
+            }
+            ParsedModuleItem::GlobalClocking {
+                identifier,
+                clocking_event,
+                end_label,
+            } => {
+                let event_ref = clocking_event.flatten(expr_arena);
+                ModuleItem::GlobalClocking {
+                    identifier,
+                    identifier_span: None,
+                    clocking_event: event_ref,
+                    end_label,
+                    span: (0, 0),
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SystemVerilogParser {
     preprocessor: Preprocessor,
+    #[allow(dead_code)]
     fail_fast: bool,
 }
 
@@ -32,7 +542,33 @@ impl SystemVerilogParser {
     }
 
     pub fn parse_file(&mut self, file_path: &Path) -> Result<SourceUnit, ParseError> {
-        // Read the raw file content
+        let mut included_files = std::collections::HashSet::new();
+        self.parse_file_with_includes(file_path, &mut included_files)
+    }
+
+    fn parse_file_with_includes(
+        &mut self,
+        file_path: &Path,
+        included_files: &mut std::collections::HashSet<std::path::PathBuf>,
+    ) -> Result<SourceUnit, ParseError> {
+        // Canonicalize the file path to detect circular includes
+        let canonical_path = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+
+        // Check for circular includes
+        if included_files.contains(&canonical_path) {
+            // Already included, return empty AST to avoid infinite recursion
+            return Ok(SourceUnit {
+                items: Vec::new(),
+                expr_arena: ExprArena::new(),
+                stmt_arena: StmtArena::new(),
+                module_item_arena: ModuleItemArena::new(),
+            });
+        }
+
+        included_files.insert(canonical_path.clone());
+
         let raw_content = std::fs::read_to_string(file_path).map_err(|e| {
             ParseError::new(SingleParseError::new(
                 format!("Failed to read file {}: {}", file_path.display(), e),
@@ -40,63 +576,282 @@ impl SystemVerilogParser {
             ))
         })?;
 
-        // Parse the raw content (to capture preprocessor directives in AST)
         let mut ast = self.parse_content(&raw_content)?;
-
-        // Resolve include paths in the AST
-        self.resolve_includes_in_ast(&mut ast, file_path)?;
-
+        self.expand_includes_in_ast(&mut ast, file_path, included_files)?;
         Ok(ast)
     }
 
-    /// Resolve all include directive paths in the AST
-    fn resolve_includes_in_ast(
-        &self,
+    fn expand_includes_in_ast(
+        &mut self,
         ast: &mut SourceUnit,
         current_file: &Path,
+        included_files: &mut std::collections::HashSet<std::path::PathBuf>,
     ) -> Result<(), ParseError> {
-        for item in &mut ast.items {
-            self.resolve_includes_in_item(item, current_file)?;
+        let mut i = 0;
+        while i < ast.items.len() {
+            let item_ref = ast.items[i];
+            let item = ast.module_item_arena.get(item_ref);
+
+            // Check if this is an include directive
+            if let ModuleItem::IncludeDirective { path, .. } = item {
+                let include_path = path.clone();
+
+                // Resolve the include path
+                let resolved_path = self.resolve_include_path(&include_path, current_file)?;
+
+                // Parse the included file
+                let included_ast = self.parse_file_with_includes(&resolved_path, included_files)?;
+
+                // Remove the include directive from the AST
+                ast.items.remove(i);
+
+                // Merge the included AST into the current AST
+                // First, we need to copy the arenas and remap references
+                let item_offset = ast.module_item_arena.nodes.len() as u32;
+                let expr_offset = ast.expr_arena.nodes.len() as u32;
+                let stmt_offset = ast.stmt_arena.nodes.len() as u32;
+
+                // Merge arenas
+                ast.expr_arena.nodes.extend(included_ast.expr_arena.nodes);
+                ast.stmt_arena.nodes.extend(included_ast.stmt_arena.nodes);
+
+                // Copy and remap module items
+                for included_item in included_ast.module_item_arena.nodes {
+                    let remapped_item =
+                        Self::remap_item(included_item, expr_offset, stmt_offset, item_offset);
+                    ast.module_item_arena.nodes.push(remapped_item);
+                }
+
+                // Insert the included items into the current position
+                for included_item_ref in included_ast.items {
+                    ast.items.insert(i, included_item_ref + item_offset);
+                    i += 1;
+                }
+
+                // Continue processing from the current position
+                // (don't increment i, as we've already advanced it)
+            } else {
+                // Not an include directive, check if it's a module with nested includes
+                self.expand_includes_in_module(item_ref, current_file, ast, included_files)?;
+                i += 1;
+            }
         }
         Ok(())
     }
 
-    /// Recursively resolve includes in a module item
-    fn resolve_includes_in_item(
-        &self,
-        item: &mut ModuleItem,
+    fn expand_includes_in_module(
+        &mut self,
+        item_ref: ModuleItemRef,
         current_file: &Path,
+        ast: &mut SourceUnit,
+        included_files: &mut std::collections::HashSet<std::path::PathBuf>,
     ) -> Result<(), ParseError> {
-        match item {
-            ModuleItem::IncludeDirective {
-                path,
-                resolved_path,
-                ..
-            } => {
-                // Resolve the include path
-                *resolved_path = Some(self.resolve_include_path(path, current_file)?);
-            }
-            ModuleItem::ModuleDeclaration { items, .. } => {
-                // Recursively resolve includes in module body
-                for sub_item in items {
-                    self.resolve_includes_in_item(sub_item, current_file)?;
+        let item = ast.module_item_arena.get(item_ref);
+
+        if let ModuleItem::ModuleDeclaration { items, .. } = item {
+            let nested_items = items.clone();
+            let _ = item; // Release the borrow
+
+            let mut new_items = Vec::new();
+
+            for &nested_ref in &nested_items {
+                let nested_item = ast.module_item_arena.get(nested_ref);
+
+                if let ModuleItem::IncludeDirective { path, .. } = nested_item {
+                    let include_path = path.clone();
+                    let _ = nested_item;
+
+                    // Resolve and parse the included file
+                    let resolved_path = self.resolve_include_path(&include_path, current_file)?;
+                    let included_ast =
+                        self.parse_file_with_includes(&resolved_path, included_files)?;
+
+                    // Merge the included AST
+                    let item_offset = ast.module_item_arena.nodes.len() as u32;
+                    let expr_offset = ast.expr_arena.nodes.len() as u32;
+                    let stmt_offset = ast.stmt_arena.nodes.len() as u32;
+
+                    ast.expr_arena.nodes.extend(included_ast.expr_arena.nodes);
+                    ast.stmt_arena.nodes.extend(included_ast.stmt_arena.nodes);
+
+                    for included_item in included_ast.module_item_arena.nodes {
+                        let remapped_item =
+                            Self::remap_item(included_item, expr_offset, stmt_offset, item_offset);
+                        ast.module_item_arena.nodes.push(remapped_item);
+                    }
+
+                    for included_item_ref in included_ast.items {
+                        new_items.push(included_item_ref + item_offset);
+                    }
+                } else {
+                    new_items.push(nested_ref);
                 }
             }
-            _ => {}
+
+            // Update the module's items
+            let item_mut = ast.module_item_arena.get_mut(item_ref);
+            if let ModuleItem::ModuleDeclaration { items, .. } = item_mut {
+                *items = new_items.clone();
+            }
+
+            // Now recursively process nested modules
+            for &nested_ref in &new_items {
+                self.expand_includes_in_module(nested_ref, current_file, ast, included_files)?;
+            }
         }
         Ok(())
     }
 
-    /// Resolve an include path relative to the current file and include directories
+    fn remap_item(
+        item: ModuleItem,
+        expr_offset: u32,
+        stmt_offset: u32,
+        item_offset: u32,
+    ) -> ModuleItem {
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                ports,
+                items,
+                span,
+            } => ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                ports,
+                items: items.into_iter().map(|r| r + item_offset).collect(),
+                span,
+            },
+            ModuleItem::VariableDeclaration {
+                data_type,
+                signing,
+                drive_strength,
+                delay,
+                range,
+                name,
+                name_span,
+                unpacked_dimensions,
+                initial_value,
+                span,
+            } => ModuleItem::VariableDeclaration {
+                data_type,
+                signing,
+                drive_strength,
+                delay,
+                range,
+                name,
+                name_span,
+                unpacked_dimensions,
+                initial_value: initial_value.map(|r| r + expr_offset),
+                span,
+            },
+            ModuleItem::Assignment {
+                delay,
+                target,
+                expr,
+                span,
+            } => ModuleItem::Assignment {
+                delay,
+                target: target + expr_offset,
+                expr: expr + expr_offset,
+                span,
+            },
+            ModuleItem::ProceduralBlock {
+                block_type,
+                statements,
+                span,
+            } => ModuleItem::ProceduralBlock {
+                block_type,
+                statements: statements.into_iter().map(|r| r + stmt_offset).collect(),
+                span,
+            },
+            ModuleItem::ClassDeclaration {
+                name,
+                name_span,
+                extends,
+                items,
+                span,
+            } => {
+                // Class items may contain expression references too
+                let remapped_items = items
+                    .into_iter()
+                    .map(|class_item| match class_item {
+                        ClassItem::Property {
+                            qualifier,
+                            data_type,
+                            name,
+                            name_span,
+                            unpacked_dimensions,
+                            initial_value,
+                            span,
+                        } => ClassItem::Property {
+                            qualifier,
+                            data_type,
+                            name,
+                            name_span,
+                            unpacked_dimensions,
+                            initial_value: initial_value.map(|r| r + expr_offset),
+                            span,
+                        },
+                        ClassItem::Method {
+                            qualifier,
+                            return_type,
+                            name,
+                            name_span,
+                            parameters,
+                            body,
+                            span,
+                        } => ClassItem::Method {
+                            qualifier,
+                            return_type,
+                            name,
+                            name_span,
+                            parameters,
+                            body: body.into_iter().map(|r| r + stmt_offset).collect(),
+                            span,
+                        },
+                    })
+                    .collect();
+
+                ModuleItem::ClassDeclaration {
+                    name,
+                    name_span,
+                    extends,
+                    items: remapped_items,
+                    span,
+                }
+            }
+            ModuleItem::ConcurrentAssertion { statement, span } => {
+                ModuleItem::ConcurrentAssertion {
+                    statement: statement + stmt_offset,
+                    span,
+                }
+            }
+            ModuleItem::GlobalClocking {
+                identifier,
+                identifier_span,
+                clocking_event,
+                end_label,
+                span,
+            } => ModuleItem::GlobalClocking {
+                identifier,
+                identifier_span,
+                clocking_event: clocking_event + expr_offset,
+                end_label,
+                span,
+            },
+            // Items that don't need remapping
+            other => other,
+        }
+    }
+
     fn resolve_include_path(
         &self,
         filename: &str,
         current_file: &Path,
     ) -> Result<PathBuf, ParseError> {
-        // Try to find the file in include directories
         let mut found_path = None;
 
-        // First try relative to current file
         if let Some(parent) = current_file.parent() {
             let candidate = parent.join(filename);
             if candidate.exists() {
@@ -104,10 +859,9 @@ impl SystemVerilogParser {
             }
         }
 
-        // Then try include directories from preprocessor
         if found_path.is_none() {
-            for inc_dir in &self.preprocessor.include_dirs {
-                let candidate = inc_dir.join(filename);
+            for include_dir in &self.preprocessor.include_dirs {
+                let candidate = include_dir.join(filename);
                 if candidate.exists() {
                     found_path = Some(candidate);
                     break;
@@ -116,472 +870,207 @@ impl SystemVerilogParser {
         }
 
         found_path.ok_or_else(|| {
-            ParseError::new(
-                SingleParseError::new(
-                    format!("Include file '{}' not found", filename),
-                    ParseErrorType::PreprocessorError,
-                )
-                .with_suggestion(format!(
-                    "Check if '{}' exists in include directories",
-                    filename
-                )),
-            )
-        })
-    }
-
-    /// Parse a file and recursively parse all included files, merging them into a single AST
-    /// This is useful for building a complete project AST
-    pub fn parse_file_with_includes(&mut self, file_path: &Path) -> Result<SourceUnit, ParseError> {
-        let mut visited = std::collections::HashSet::new();
-        self.parse_file_recursive(file_path, &mut visited)
-    }
-
-    /// Recursively parse a file and its includes
-    fn parse_file_recursive(
-        &mut self,
-        file_path: &Path,
-        visited: &mut std::collections::HashSet<PathBuf>,
-    ) -> Result<SourceUnit, ParseError> {
-        // Canonicalize the path to handle relative paths and symlinks
-        let canonical_path = file_path.canonicalize().map_err(|e| {
             ParseError::new(SingleParseError::new(
-                format!("Failed to canonicalize path {}: {}", file_path.display(), e),
+                format!("Include file '{}' not found", filename),
                 ParseErrorType::PreprocessorError,
             ))
-        })?;
-
-        // Check for circular includes
-        if visited.contains(&canonical_path) {
-            return Ok(SourceUnit { items: vec![] }); // Skip circular includes silently
-        }
-        visited.insert(canonical_path.clone());
-
-        // Parse the file normally
-        let mut ast = self.parse_file(file_path)?;
-
-        // Process all include directives
-        let mut expanded_items = Vec::new();
-        for item in ast.items {
-            match item {
-                ModuleItem::IncludeDirective { resolved_path, .. } => {
-                    // Parse the included file recursively
-                    if let Some(ref include_path) = resolved_path {
-                        match self.parse_file_recursive(include_path, visited) {
-                            Ok(included_ast) => {
-                                // Add all items from the included file
-                                expanded_items.extend(included_ast.items);
-                            }
-                            Err(_) => {
-                                // If we can't parse an included file, skip it but continue
-                                // This allows partial parsing of projects
-                            }
-                        }
-                    }
-                }
-                other => {
-                    expanded_items.push(other);
-                }
-            }
-        }
-
-        ast.items = expanded_items;
-        Ok(ast)
-    }
-
-    /// Parse with error recovery - returns partial AST even if there are errors
-    pub fn parse_content_recovery(&self, content: &str) -> crate::ParseResult {
-        let parser = self.source_unit_parser();
-
-        let (ast, chumsky_errors) = parser.parse_recovery(content);
-
-        let mut parse_errors = Vec::new();
-
-        // Process all errors from chumsky
-        for error in chumsky_errors {
-            let (message, error_type, suggestions, improved_span) =
-                self.convert_chumsky_error(&error, content);
-
-            // Use improved span if available, otherwise use chumsky's span
-            let final_span = improved_span.unwrap_or_else(|| error.span());
-            let location = self.span_to_location(final_span.clone(), content);
-
-            let mut single_error = SingleParseError::new(message, error_type);
-
-            if let Some(loc) = location {
-                single_error = single_error.with_location(loc);
-            }
-
-            if !suggestions.is_empty() {
-                single_error = single_error.with_suggestions(suggestions);
-            }
-
-            parse_errors.push(single_error);
-        }
-
-        // Sort errors by location for better presentation
-        parse_errors.sort_by(|a, b| match (&a.location, &b.location) {
-            (Some(loc_a), Some(loc_b)) => loc_a
-                .line
-                .cmp(&loc_b.line)
-                .then_with(|| loc_a.column.cmp(&loc_b.column)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
-
-        crate::ParseResult {
-            ast,
-            errors: parse_errors,
-        }
+        })
     }
 
     pub fn parse_content(&self, content: &str) -> Result<SourceUnit, ParseError> {
-        let parser = self.source_unit_parser();
+        let mut expr_arena = ExprArena::new();
+        let mut stmt_arena = StmtArena::new();
+        let mut module_item_arena = ModuleItemArena::new();
+        let parser = self.build_parser();
 
-        parser.parse(content).map_err(|chumsky_errors| {
-            let mut parse_errors = Vec::new();
-
-            // Process all errors from chumsky
-            for error in chumsky_errors {
-                let (message, error_type, suggestions, improved_span) =
-                    self.convert_chumsky_error(&error, content);
-
-                // Use improved span if available, otherwise use chumsky's span
-                let final_span = improved_span.unwrap_or_else(|| error.span());
-                let location = self.span_to_location(final_span.clone(), content);
-
-                let mut single_error = SingleParseError::new(message, error_type);
-
-                if let Some(loc) = location {
-                    single_error = single_error.with_location(loc);
-                }
-
-                if !suggestions.is_empty() {
-                    single_error = single_error.with_suggestions(suggestions);
-                }
-
-                parse_errors.push(single_error);
-
-                // If fail-fast is enabled, stop after the first error
-                if self.fail_fast {
-                    break;
-                }
-            }
-
-            if parse_errors.is_empty() {
-                // Fallback error if we couldn't convert any errors
-                ParseError::new(SingleParseError::new(
-                    "Unknown parse error".to_string(),
-                    ParseErrorType::InvalidSyntax,
-                ))
-            } else {
-                // Sort errors by location for better presentation
-                parse_errors.sort_by(|a, b| match (&a.location, &b.location) {
-                    (Some(loc_a), Some(loc_b)) => loc_a
-                        .line
-                        .cmp(&loc_b.line)
-                        .then_with(|| loc_a.column.cmp(&loc_b.column)),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                });
-
-                ParseError::multiple(parse_errors)
-            }
-        })
-    }
-
-    /// Perform semantic analysis on a parsed AST
-    /// Returns a vector of semantic errors (empty if no errors found)
-    pub fn analyze_semantics(&self, ast: &SourceUnit) -> Vec<crate::semantic::SemanticError> {
-        let mut analyzer = crate::semantic::SemanticAnalyzer::new();
-        analyzer.analyze(ast)
-    }
-
-    fn span_to_location(
-        &self,
-        span: std::ops::Range<usize>,
-        content: &str,
-    ) -> Option<SourceLocation> {
-        if span.start > content.len() {
-            return None;
-        }
-
-        let prefix = &content[..span.start];
-        let line = prefix.matches('\n').count();
-        let column = prefix.split('\n').last().unwrap_or("").len();
-
-        Some(SourceLocation {
-            line,
-            column,
-            span: Some((span.start, span.end)),
-        })
-    }
-
-    fn convert_chumsky_error(
-        &self,
-        error: &Simple<char>,
-        content: &str,
-    ) -> (
-        String,
-        ParseErrorType,
-        Vec<String>,
-        Option<std::ops::Range<usize>>,
-    ) {
-        match error.reason() {
-            chumsky::error::SimpleReason::Unexpected => {
-                let found = error
-                    .found()
-                    .map(|c| format!("'{}'", c))
-                    .unwrap_or_else(|| "end of input".to_string());
-
-                let expected: Vec<String> = error
-                    .expected()
-                    .map(|exp| match exp {
-                        Some(c) => format!("'{}'", c),
-                        None => "end of input".to_string(),
+        match parser.parse(content) {
+            Ok(parsed_items) => {
+                // Flatten ParsedModuleItems into ModuleItems + arena, then allocate them
+                let item_refs: Vec<ModuleItemRef> = parsed_items
+                    .into_iter()
+                    .map(|item| {
+                        let module_item =
+                            item.flatten(&mut expr_arena, &mut stmt_arena, &mut module_item_arena);
+                        module_item_arena.alloc(module_item)
                     })
                     .collect();
 
-                // Analyze the context to provide better error messages
-                self.analyze_parse_context(&found, &expected, error.span(), content)
+                Ok(SourceUnit {
+                    items: item_refs,
+                    expr_arena,
+                    stmt_arena,
+                    module_item_arena,
+                })
             }
-            chumsky::error::SimpleReason::Unclosed { span: _, delimiter } => (
-                format!("Unclosed delimiter '{}'", delimiter),
-                ParseErrorType::ExpectedToken(delimiter.to_string()),
-                vec![format!("Add closing '{}'", delimiter)],
-                None,
-            ),
-            chumsky::error::SimpleReason::Custom(msg) => {
-                (msg.clone(), ParseErrorType::InvalidSyntax, Vec::new(), None)
-            }
-        }
-    }
-
-    fn analyze_parse_context(
-        &self,
-        found: &str,
-        expected: &[String],
-        _error_span: std::ops::Range<usize>,
-        _content: &str,
-    ) -> (
-        String,
-        ParseErrorType,
-        Vec<String>,
-        Option<std::ops::Range<usize>>,
-    ) {
-        // Special case: if we're expecting 'n' and found newline/end, it's likely missing "endmodule"
-        if expected.contains(&"'n'".to_string()) {
-            if found == "end of input" || found == "'\n'" {
-                return (
-                    "Missing 'endmodule' to close module declaration".to_string(),
-                    ParseErrorType::ExpectedToken("endmodule".to_string()),
-                    vec!["Add 'endmodule' to complete the module".to_string()],
-                    None,
-                );
-            } else {
-                return (
-                    format!("Expected 'endmodule', found unexpected character {}", found),
-                    ParseErrorType::UnexpectedToken,
-                    vec!["Replace with 'endmodule' to close the module".to_string()],
-                    None,
-                );
-            }
-        }
-
-        // Check if we're at end of input and expecting statement terminators
-        if found == "end of input" && expected.contains(&"';'".to_string()) {
-            return (
-                "Missing semicolon at end of statement".to_string(),
-                ParseErrorType::ExpectedToken(";".to_string()),
-                vec!["Add ';' to complete the statement".to_string()],
-                None,
-            );
-        }
-
-        // Check if we're expecting characters that form other keywords
-        if self.expects_keyword_pattern(expected) {
-            let (msg, err_type, sugg) = self.suggest_keyword_completion(found, expected);
-            return (msg, err_type, sugg, None);
-        }
-
-        // Check for unexpected character when expecting specific tokens
-        if found != "end of input" && !expected.is_empty() {
-            let meaningful_expected: Vec<String> = expected
-                .iter()
-                .filter(|exp| self.is_meaningful_expectation(exp))
-                .cloned()
-                .collect();
-
-            if !meaningful_expected.is_empty() {
-                let suggestions = meaningful_expected
-                    .iter()
-                    .map(|exp| self.expectation_to_suggestion(exp))
-                    .filter(|s| !s.is_empty())
+            Err(errors) => {
+                let parse_errors: Vec<SingleParseError> = errors
+                    .into_iter()
+                    .map(|e| {
+                        let span = e.span();
+                        let location = Self::span_to_location(content, span);
+                        SingleParseError::new(
+                            format!("Parse error: {:?}", e),
+                            ParseErrorType::InvalidSyntax,
+                        )
+                        .with_location(location)
+                    })
                     .collect();
+                Err(ParseError::multiple(parse_errors))
+            }
+        }
+    }
 
-                return (
-                    format!(
-                        "Unexpected {}, expected {}",
-                        found,
-                        self.format_expectations(&meaningful_expected)
-                    ),
-                    ParseErrorType::UnexpectedToken,
-                    suggestions,
-                    None,
-                );
+    /// Convert a character span to a SourceLocation with line/column information
+    fn span_to_location(content: &str, span: std::ops::Range<usize>) -> crate::SourceLocation {
+        let start = span.start;
+
+        // Count lines and columns
+        let mut line = 0;
+        let mut last_line_start = 0;
+
+        for (i, ch) in content.char_indices() {
+            if i >= start {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                last_line_start = i + 1;
             }
         }
 
-        // Fallback to generic message
-        let message = if expected.is_empty() {
-            format!("Unexpected {}", found)
-        } else {
-            format!("Unexpected {}", found)
-        };
+        let column = start - last_line_start;
 
-        (message, ParseErrorType::UnexpectedToken, Vec::new(), None)
+        crate::SourceLocation {
+            line,
+            column,
+            span: Some((span.start, span.end)),
+        }
     }
 
-    fn expects_keyword_pattern(&self, expected: &[String]) -> bool {
-        // Check if the expected characters suggest we're in the middle of parsing a keyword
-        expected.iter().any(|exp| {
-            matches!(
-                exp.as_str(),
-                "'n'" | "'d'" | "'m'" | "'o'" | "'u'" | "'l'" | "'e'"
-            )
-        })
-    }
-
-    fn suggest_keyword_completion(
+    pub fn analyze_semantics(
         &self,
-        found: &str,
-        expected: &[String],
-    ) -> (String, ParseErrorType, Vec<String>) {
-        // If we expect 'n' and are at end of input, likely missing "endmodule"
-        if expected.contains(&"'n'".to_string()) && found == "end of input" {
-            return (
-                "Missing 'endmodule' to close module declaration".to_string(),
-                ParseErrorType::ExpectedToken("endmodule".to_string()),
-                vec!["Add 'endmodule' to complete the module".to_string()],
-            );
-        }
-
-        // If we expect 'd' and are at end of input, might be missing "end"
-        if expected.contains(&"'d'".to_string()) && found == "end of input" {
-            return (
-                "Missing keyword completion".to_string(),
-                ParseErrorType::ExpectedToken("end".to_string()),
-                vec!["Complete the keyword (e.g., 'end', 'endmodule')".to_string()],
-            );
-        }
-
-        // Default for keyword patterns
-        (
-            format!("Incomplete keyword, found {}", found),
-            ParseErrorType::ExpectedToken("keyword".to_string()),
-            vec!["Complete the SystemVerilog keyword".to_string()],
-        )
+        source_unit: &SourceUnit,
+    ) -> Vec<crate::semantic::SemanticError> {
+        let mut analyzer = crate::semantic::SemanticAnalyzer::new();
+        analyzer.analyze(source_unit)
     }
 
-    fn is_meaningful_expectation(&self, exp: &str) -> bool {
-        // Filter out single letter expectations that are likely part of keywords
-        matches!(
-            exp,
-            "';'" | "'('" | "')'" | "'{'" | "'}'" | "'['" | "']'" | "','" | "'='" | "end of input"
-        )
-    }
-
-    fn expectation_to_suggestion(&self, exp: &str) -> String {
-        match exp {
-            "';'" => "Add semicolon ';'".to_string(),
-            "'('" => "Add opening parenthesis '('".to_string(),
-            "')'" => "Add closing parenthesis ')'".to_string(),
-            "'{'" => "Add opening brace '{'".to_string(),
-            "'}'" => "Add closing brace '}'".to_string(),
-            "'['" => "Add opening bracket '['".to_string(),
-            "']'" => "Add closing bracket ']'".to_string(),
-            "','" => "Add comma ','".to_string(),
-            "'='" => "Add assignment operator '='".to_string(),
-            "end of input" => "Check if statement is complete".to_string(),
-            _ => String::new(),
-        }
-    }
-
-    fn format_expectations(&self, expected: &[String]) -> String {
-        if expected.len() == 1 {
-            expected[0].clone()
-        } else if expected.len() <= 3 {
-            expected.join(" or ")
-        } else {
-            format!("one of: {}", expected.join(", "))
-        }
-    }
-
-    fn source_unit_parser(&self) -> impl Parser<char, SourceUnit, Error = Simple<char>> + Clone {
+    fn build_parser(&self) -> impl Parser<char, Vec<ParsedModuleItem>, Error = Simple<char>> + '_ {
         // Comments
-        let line_comment = just("//").then(filter(|c| *c != '\n').repeated()).ignored();
-
-        let block_comment = just("/*")
-            .then(just("*/").not().rewind().then(any()).repeated())
-            .then(just("*/"))
+        let line_comment = just("//")
+            .then(take_until(text::newline().or(end())))
             .ignored();
+        let block_comment = just("/*").then(take_until(just("*/"))).ignored();
 
-        let comment = choice((line_comment, block_comment));
+        // Whitespace and comments - match any combination
+        let ws = choice((
+            filter(|c: &char| c.is_whitespace()).ignored(),
+            line_comment,
+            block_comment,
+        ))
+        .repeated()
+        .ignored();
 
-        let whitespace =
-            choice((one_of(" \t\r\n").repeated().at_least(1).ignored(), comment)).repeated();
+        // Keywords that should not be identifiers
+        let keywords = [
+            "module",
+            "endmodule",
+            "input",
+            "output",
+            "inout",
+            "wire",
+            "assign",
+            "initial",
+            "always",
+            "always_comb",
+            "always_ff",
+            "final",
+            "begin",
+            "end",
+            "if",
+            "else",
+            "case",
+            "casex",
+            "casez",
+            "endcase",
+            "int",
+            "logic",
+            "bit",
+            "byte",
+            "reg",
+            "signed",
+            "unsigned",
+            "integer",
+            "time",
+            "shortint",
+            "longint",
+            "class",
+            "endclass",
+            "extends",
+            "function",
+            "endfunction",
+            "local",
+            "protected",
+            "new",
+            "assert",
+            "property",
+            "unique",
+            "unique0",
+            "priority",
+            "global",
+            "clocking",
+            "endclocking",
+            "struct",
+            "union",
+            "packed",
+            "soft",
+            "tagged",
+            "supply0",
+            "supply1",
+            "tri",
+            "triand",
+            "trior",
+        ];
 
-        // Basic tokens
-        let identifier_inner = filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
-            .then(filter(|c: &char| c.is_ascii_alphanumeric() || *c == '_').repeated())
-            .map(|(first, rest): (char, Vec<char>)| {
-                let mut result = String::new();
-                result.push(first);
-                result.extend(rest);
-                result
+        // Identifier: [a-zA-Z_][a-zA-Z0-9_$]* (but not keywords)
+        let identifier = filter(|c: &char| c.is_alphabetic() || *c == '_')
+            .chain::<char, _, _>(
+                filter(|c: &char| c.is_alphanumeric() || *c == '_' || *c == '$').repeated(),
+            )
+            .collect::<String>()
+            .try_map(move |s, span| {
+                if keywords.contains(&s.as_str()) {
+                    Err(Simple::custom(span, format!("'{}' is a keyword", s)))
+                } else {
+                    Ok(s)
+                }
             });
 
-        let identifier = identifier_inner.clone().padded_by(whitespace.clone());
-
-        // Helper to get identifier with its span (before padding)
-        let identifier_with_span = identifier_inner
-            .clone()
-            .map_with_span(|name, span: std::ops::Range<usize>| (name, (span.start, span.end)))
-            .padded_by(whitespace.clone());
-
-        // Support both simple numbers and SystemVerilog sized numbers like 8'b1101z001
-        let number = choice((
-            // SystemVerilog sized number: size'base_value (e.g., 8'b1101z001, 4'hA, 32'd123)
-            filter(|c: &char| c.is_ascii_digit())
-                .repeated()
-                .at_least(1)
-                .then_ignore(just('\''))
-                .then(one_of("bBdDhHoO"))
-                .then(
-                    filter(|c: &char| c.is_ascii_alphanumeric() || *c == '_')
-                        .repeated()
-                        .at_least(1),
+        // Number: decimal, hex, binary, octal (including z/x for high-Z/unknown)
+        let number = filter(|c: &char| {
+            c.is_ascii_digit()
+                || matches!(
+                    c,
+                    '\'' | 'x'
+                        | 'b'
+                        | 'o'
+                        | 'd'
+                        | 'h'
+                        | 'z'
+                        | '_'
+                        | 'X'
+                        | 'B'
+                        | 'O'
+                        | 'D'
+                        | 'H'
+                        | 'Z'
                 )
-                .map(
-                    |((size_digits, base), value_chars): ((Vec<char>, char), Vec<char>)| {
-                        let mut result = String::new();
-                        result.extend(size_digits);
-                        result.push('\'');
-                        result.push(base);
-                        result.extend(value_chars);
-                        result
-                    },
-                ),
-            // Simple decimal number
-            filter(|c: &char| c.is_ascii_digit())
-                .repeated()
-                .at_least(1)
-                .collect::<String>(),
-        ))
-        .padded_by(whitespace.clone());
+        })
+        .repeated()
+        .at_least(1)
+        .collect::<String>();
 
-        // String literal parser - handles escaped quotes
+        // String literal: "..."
         let string_literal = just('"')
             .ignore_then(
                 filter(|c: &char| *c != '"' && *c != '\\')
@@ -589,69 +1078,59 @@ impl SystemVerilogParser {
                     .repeated()
                     .collect::<String>(),
             )
-            .then_ignore(just('"'))
-            .padded_by(whitespace.clone());
+            .then_ignore(just('"'));
 
-        // Expression parser with unary and binary operators
+        // Expression parser (recursive)
         let expr = recursive(|expr| {
-            // System function call like $sin(4)
+            // System function call: $display(...), $sin(...), etc.
             let system_function = just('$')
                 .ignore_then(identifier.clone())
                 .then(
                     expr.clone()
-                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .separated_by(just(',').padded_by(ws.clone()))
                         .delimited_by(just('('), just(')'))
                         .or_not()
                         .map(|args| args.unwrap_or_default()),
                 )
-                .map_with_span(|(name, arguments), span: std::ops::Range<usize>| {
-                    Expression::SystemFunctionCall {
-                        name,
-                        arguments,
-                        span: (span.start, span.end),
-                    }
-                })
-                .padded_by(whitespace.clone());
+                .map(|(name, arguments)| ParsedExpression::SystemFunctionCall {
+                    name,
+                    arguments,
+                    span: (0, 0),
+                });
 
-            // New expression (class instantiation) - parentheses are optional
-            let new_expr = just("new")
+            // New expression: new or new(args)
+            let new_expr = text::keyword("new")
                 .then(
-                    expr.clone()
-                        .separated_by(just(',').padded_by(whitespace.clone()))
-                        .delimited_by(just('('), just(')'))
+                    just('(')
+                        .padded_by(ws.clone())
+                        .ignore_then(expr.clone().separated_by(just(',').padded_by(ws.clone())))
+                        .then_ignore(just(')').padded_by(ws.clone()))
                         .or_not(),
                 )
-                .map_with_span(
-                    |(_new, arguments), span: std::ops::Range<usize>| Expression::New {
-                        arguments: arguments.unwrap_or_default(),
-                        span: (span.start, span.end),
-                    },
-                )
-                .padded_by(whitespace.clone());
+                .map(|(_new, arguments)| ParsedExpression::New {
+                    arguments: arguments.unwrap_or_default(),
+                    span: (0, 0),
+                });
 
             let atom = choice((
                 new_expr,
                 system_function,
                 string_literal
                     .clone()
-                    .map_with_span(|s, span: std::ops::Range<usize>| {
-                        Expression::StringLiteral(s, (span.start, span.end))
-                    }),
+                    .map(|s| ParsedExpression::StringLiteral(s, (0, 0))),
                 identifier
                     .clone()
-                    .map_with_span(|name, span: std::ops::Range<usize>| {
-                        Expression::Identifier(name, (span.start, span.end))
-                    }),
+                    .map(|name| ParsedExpression::Identifier(name, (0, 0))),
                 number
                     .clone()
-                    .map_with_span(|num, span: std::ops::Range<usize>| {
-                        Expression::Number(num, (span.start, span.end))
-                    }),
-                expr.clone().delimited_by(just('('), just(')')),
-            ))
-            .padded_by(whitespace.clone());
+                    .map(|num| ParsedExpression::Number(num, (0, 0))),
+                expr.clone().delimited_by(
+                    just('(').padded_by(ws.clone()),
+                    just(')').padded_by(ws.clone()),
+                ),
+            ));
 
-            // Unary operators - note the order is important for correct parsing
+            // Unary operators - order matters for multi-char operators!
             let unary_op = choice((
                 just("~&").to(UnaryOp::ReductionNand),
                 just("~|").to(UnaryOp::ReductionNor),
@@ -663,727 +1142,206 @@ impl SystemVerilogParser {
                 just("&").to(UnaryOp::ReductionAnd),
                 just("|").to(UnaryOp::ReductionOr),
                 just("^").to(UnaryOp::ReductionXor),
-            ))
-            .padded_by(whitespace.clone());
+            ));
 
-            // Member access handles dot notation (e.g., obj.property)
-            let member_access = atom
-                .clone()
-                .then(
-                    just('.')
-                        .ignore_then(identifier_with_span.clone())
-                        .repeated(),
-                )
-                .foldl(|object, (member, member_span)| {
-                    let start = match &object {
-                        Expression::Identifier(_, span)
-                        | Expression::Number(_, span)
-                        | Expression::StringLiteral(_, span)
-                        | Expression::Binary { span, .. }
-                        | Expression::Unary { span, .. }
-                        | Expression::MacroUsage { span, .. }
-                        | Expression::SystemFunctionCall { span, .. }
-                        | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. }
-                        | Expression::FunctionCall { span, .. } => span.0,
-                    };
-                    Expression::MemberAccess {
-                        object: Box::new(object),
-                        member,
-                        member_span,
-                        span: (start, member_span.1),
-                    }
-                })
-                .padded_by(whitespace.clone());
+            // Unary expression: !a, ~b, +c, -d
+            let unary_expr =
+                unary_op
+                    .then_ignore(ws.clone())
+                    .then(atom.clone())
+                    .map(|(op, operand)| ParsedExpression::Unary {
+                        op,
+                        operand: Box::new(operand),
+                        span: (0, 0),
+                    });
 
-            // Function call handles function/method calls (e.g., func() or obj.method())
+            // Member access: obj.field, obj.field.subfield
+            let member_access = choice((unary_expr.clone(), atom.clone()))
+                .then(just('.').ignore_then(identifier.clone()).repeated())
+                .foldl(|object, member| ParsedExpression::MemberAccess {
+                    object: Box::new(object),
+                    member,
+                    member_span: (0, 0),
+                    span: (0, 0),
+                });
+
+            // Function call: func(), obj.method()
             let function_call = member_access
                 .clone()
                 .then(
                     expr.clone()
-                        .separated_by(just(',').padded_by(whitespace.clone()))
+                        .separated_by(just(',').padded_by(ws.clone()))
                         .delimited_by(just('('), just(')'))
                         .or_not(),
                 )
-                .map_with_span(|(function, maybe_args), span: std::ops::Range<usize>| {
+                .map(|(function, maybe_args)| {
                     if let Some(args) = maybe_args {
-                        Expression::FunctionCall {
+                        ParsedExpression::FunctionCall {
                             function: Box::new(function),
                             arguments: args,
-                            span: (span.start, span.end),
+                            span: (0, 0),
                         }
                     } else {
                         function
                     }
-                })
-                .padded_by(whitespace.clone());
+                });
 
-            // Factor handles unary operators, member access, and function calls
-            let factor = choice((
-                unary_op.clone().then(expr.clone()).map_with_span(
-                    |(op, operand), span: std::ops::Range<usize>| Expression::Unary {
-                        op,
-                        operand: Box::new(operand),
-                        span: (span.start, span.end),
-                    },
-                ),
-                function_call,
-            ))
-            .padded_by(whitespace.clone());
+            let primary = function_call;
 
-            // Multi-character operators (must come before single-character ones)
-            let multi_char_ops = choice((
+            // Binary operators - split into groups to avoid tuple size limits
+            let binary_op_multi = choice((
                 just("<->").to(BinaryOp::LogicalEquiv),
-                just("**").to(BinaryOp::Power),
+                just("->").to(BinaryOp::LogicalImpl),
                 just("<<<").to(BinaryOp::ArithmeticShiftLeft),
                 just(">>>").to(BinaryOp::ArithmeticShiftRight),
                 just("<<").to(BinaryOp::LogicalShiftLeft),
                 just(">>").to(BinaryOp::LogicalShiftRight),
                 just("<=").to(BinaryOp::LessEqual),
                 just(">=").to(BinaryOp::GreaterEqual),
-                just("&&").to(BinaryOp::LogicalAnd),
-                just("||").to(BinaryOp::LogicalOr),
-                just("->").to(BinaryOp::LogicalImpl),
                 just("===").to(BinaryOp::CaseEqual),
                 just("!==").to(BinaryOp::CaseNotEqual),
                 just("==?").to(BinaryOp::WildcardEqual),
                 just("!=?").to(BinaryOp::WildcardNotEqual),
                 just("==").to(BinaryOp::Equal),
                 just("!=").to(BinaryOp::NotEqual),
+                just("&&").to(BinaryOp::LogicalAnd),
+                just("||").to(BinaryOp::LogicalOr),
+            ));
+
+            let binary_op_single = choice((
+                just("**").to(BinaryOp::Power),
                 just("~^").to(BinaryOp::BitwiseXnor),
+                just("<").to(BinaryOp::LessThan),
+                just(">").to(BinaryOp::GreaterThan),
+                just("+").to(BinaryOp::Add),
+                just("-").to(BinaryOp::Sub),
+                just("*").to(BinaryOp::Mul),
+                just("/").to(BinaryOp::Div),
+                just("%").to(BinaryOp::Modulo),
+                just("&").to(BinaryOp::And),
+                just("|").to(BinaryOp::Or),
+                just("^").to(BinaryOp::Xor),
             ));
 
-            let single_char_ops = choice((
-                just('<').to(BinaryOp::LessThan),
-                just('>').to(BinaryOp::GreaterThan),
-                just('+').to(BinaryOp::Add),
-                just('-').to(BinaryOp::Sub),
-                just('*').to(BinaryOp::Mul),
-                just('/').to(BinaryOp::Div),
-                just('%').to(BinaryOp::Modulo),
-                just('&').to(BinaryOp::And),
-                just('|').to(BinaryOp::Or),
-                just('^').to(BinaryOp::Xor),
-            ));
+            let binary_op = choice((binary_op_multi, binary_op_single));
 
-            let binary_op = choice((multi_char_ops, single_char_ops)).padded_by(whitespace.clone());
-
-            factor
+            primary
                 .clone()
-                .then(binary_op.then(factor).repeated())
-                .foldl(|left, (op, right)| {
-                    // Calculate span from left to right
-                    let left_span = match &left {
-                        Expression::Identifier(_, s)
-                        | Expression::Number(_, s)
-                        | Expression::StringLiteral(_, s) => *s,
-                        Expression::Binary { span, .. }
-                        | Expression::Unary { span, .. }
-                        | Expression::MacroUsage { span, .. }
-                        | Expression::SystemFunctionCall { span, .. }
-                        | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. }
-                        | Expression::FunctionCall { span, .. } => *span,
-                    };
-                    let right_span = match &right {
-                        Expression::Identifier(_, s)
-                        | Expression::Number(_, s)
-                        | Expression::StringLiteral(_, s) => *s,
-                        Expression::Binary { span, .. }
-                        | Expression::Unary { span, .. }
-                        | Expression::MacroUsage { span, .. }
-                        | Expression::SystemFunctionCall { span, .. }
-                        | Expression::New { span, .. }
-                        | Expression::MemberAccess { span, .. }
-                        | Expression::FunctionCall { span, .. } => *span,
-                    };
-                    Expression::Binary {
-                        op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        span: (left_span.0, right_span.1),
+                .then(
+                    binary_op
+                        .padded_by(ws.clone())
+                        .then(primary.clone())
+                        .or_not(),
+                )
+                .map(|(left, maybe_right)| {
+                    if let Some((op, right)) = maybe_right {
+                        ParsedExpression::Binary {
+                            op,
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            span: (0, 0),
+                        }
+                    } else {
+                        left
                     }
                 })
         });
 
-        // Port direction
-        let port_direction = choice((
-            just("input").to(PortDirection::Input),
-            just("output").to(PortDirection::Output),
-            just("inout").to(PortDirection::Inout),
-        ))
-        .padded_by(whitespace.clone());
+        // Delay: #number
+        let delay = just('#').ignore_then(number.clone()).map(Delay::Value);
 
-        // Range parser [msb:lsb] e.g., [7:0] or [3:0]
+        // Range: [3:0]
         let range = just('[')
+            .padded_by(ws.clone())
             .ignore_then(choice((number.clone(), identifier.clone())))
+            .then_ignore(ws.clone())
             .then_ignore(just(':'))
+            .then_ignore(ws.clone())
             .then(choice((number.clone(), identifier.clone())))
+            .then_ignore(ws.clone())
             .then_ignore(just(']'))
-            .map(|(msb, lsb)| Range { msb, lsb })
-            .padded_by(whitespace.clone());
+            .map(|(msb, lsb)| Range { msb, lsb });
 
-        // Unpacked dimension parser
-        // Parses: [] (dynamic), [N] (fixed size), or [msb:lsb] (range)
-        let unpacked_dimension = just('[')
+        // Concurrent assertion
+        let concurrent_assertion = text::keyword("assert")
+            .padded_by(ws.clone())
+            .ignore_then(text::keyword("property"))
+            .then_ignore(ws.clone())
             .ignore_then(
-                choice((number.clone(), identifier.clone()))
-                    .then(
-                        just(':')
-                            .padded_by(whitespace.clone())
-                            .ignore_then(choice((number.clone(), identifier.clone())))
-                            .or_not(),
-                    )
-                    .or_not(),
+                filter(|c| *c != ';')
+                    .repeated()
+                    .then_ignore(just(';').padded_by(ws.clone())),
             )
-            .then_ignore(just(']'))
-            .map(|expr_opt| match expr_opt {
-                None => UnpackedDimension::Dynamic,
-                Some((msb, Some(lsb))) => UnpackedDimension::Range(msb, lsb),
-                Some((size, None)) => UnpackedDimension::FixedSize(size),
-            })
-            .padded_by(whitespace.clone());
-
-        // Port in module header can be:
-        // - just identifier: clk
-        // - direction + identifier: input clk
-        // - direction + range + identifier: input [3:0] clk
-        // - direction + type + identifier: input wire clk
-        // - direction + type + range + identifier: input wire [3:0] clk
-        let module_port = choice((
-            // direction + type + range + identifier: input wire [3:0] clk
-            port_direction
-                .clone()
-                .then(identifier.clone()) // type (wire, reg, etc.)
-                .then(range.clone().or_not())
-                .then(identifier_with_span.clone()) // name
-                .map_with_span(
-                    |(((direction, _type), range), (name, name_span)),
-                     span: std::ops::Range<usize>| Port {
-                        name: name.clone(),
-                        name_span,
-                        direction: Some(direction),
-                        range,
-                        span: (span.start, span.end),
-                    },
-                ),
-            // direction + range + identifier: input [3:0] clk
-            port_direction
-                .clone()
-                .then(range.clone().or_not())
-                .then(identifier_with_span.clone()) // name
-                .map_with_span(
-                    |((direction, range), (name, name_span)), span: std::ops::Range<usize>| Port {
-                        name: name.clone(),
-                        name_span,
-                        direction: Some(direction),
-                        range,
-                        span: (span.start, span.end),
-                    },
-                ),
-            // just identifier: clk
-            identifier_with_span.clone().map_with_span(
-                |(name, name_span), span: std::ops::Range<usize>| Port {
-                    name: name.clone(),
-                    name_span,
-                    direction: None,
-                    range: None,
-                    span: (span.start, span.end),
+            .map(|_| ParsedModuleItem::ConcurrentAssertion {
+                statement: ParsedStatement::ExpressionStatement {
+                    expr: ParsedExpression::Identifier("placeholder".to_string(), (0, 0)),
                 },
-            ),
-        ));
+            });
 
-        // Port declaration with error recovery
-        let port_declaration = port_direction
-            .then(identifier.clone()) // port type (like wire, reg)
-            .then(identifier_with_span.clone()) // port name
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(
-                |((direction, port_type), (name, name_span)), span: std::ops::Range<usize>| {
-                    ModuleItem::PortDeclaration {
-                        direction,
-                        port_type,
-                        name: name.clone(),
-                        name_span,
-                        span: (span.start, span.end),
-                    }
-                },
-            )
-            .recover_with(skip_then_retry_until([';']))
-            .padded_by(whitespace.clone());
-
-        // Delay specification: #10
-        // For now, only support simple numeric delays
-        let delay = just('#')
-            .ignore_then(text::digits(10))
-            .map(|val: String| Delay::Value(val))
-            .padded_by(whitespace.clone());
-
-        // Assignment statement with error recovery
-        let assignment = just("assign")
-            .padded_by(whitespace.clone())
-            .ignore_then(delay.clone().or_not())
-            .then(identifier_with_span.clone())
-            .then_ignore(just('=').padded_by(whitespace.clone()))
-            .then(expr.clone())
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(
-                |((delay, (target, target_span)), expr), span: std::ops::Range<usize>| {
-                    ModuleItem::Assignment {
-                        delay,
-                        target: target.clone(),
-                        target_span,
-                        expr,
-                        span: (span.start, span.end),
-                    }
-                },
-            )
-            .recover_with(skip_then_retry_until([';']))
-            .padded_by(whitespace.clone());
-
-        // Data type keywords - order matters! Longer keywords first to avoid prefix matching
-        let data_type = choice((
+        // Type keywords - order matters! Longer keywords first
+        let type_keyword = choice((
             text::keyword("shortint").to("shortint".to_string()),
             text::keyword("longint").to("longint".to_string()),
             text::keyword("integer").to("integer".to_string()),
             text::keyword("supply0").to("supply0".to_string()),
             text::keyword("supply1").to("supply1".to_string()),
-            text::keyword("trireg").to("trireg".to_string()),
             text::keyword("triand").to("triand".to_string()),
             text::keyword("trior").to("trior".to_string()),
             text::keyword("logic").to("logic".to_string()),
             text::keyword("uwire").to("uwire".to_string()),
             text::keyword("wire").to("wire".to_string()),
             text::keyword("wand").to("wand".to_string()),
+            text::keyword("wor").to("wor".to_string()),
             text::keyword("byte").to("byte".to_string()),
             text::keyword("time").to("time".to_string()),
             text::keyword("tri0").to("tri0".to_string()),
             text::keyword("tri1").to("tri1".to_string()),
-            text::keyword("wor").to("wor".to_string()),
             text::keyword("tri").to("tri".to_string()),
             text::keyword("int").to("int".to_string()),
             text::keyword("bit").to("bit".to_string()),
             text::keyword("reg").to("reg".to_string()),
-        ))
-        .padded_by(whitespace.clone());
+        ));
 
-        // Signing keywords (signed/unsigned)
-        // Use text::keyword to ensure word boundaries
-        let signing = choice((
-            text::keyword("signed").to("signed".to_string()),
-            text::keyword("unsigned").to("unsigned".to_string()),
-        ))
-        .padded_by(whitespace.clone());
+        // Port direction
+        let port_direction = choice((
+            text::keyword("input").to(PortDirection::Input),
+            text::keyword("output").to(PortDirection::Output),
+            text::keyword("inout").to(PortDirection::Inout),
+        ));
 
-        // Drive strength parser
-        // Syntax: (strength0, strength1) or (strength1, strength0)
-        // strength1: supply1, strong1, pull1, weak1, highz1
-        // strength0: supply0, strong0, pull0, weak0, highz0
-        let strength0_keyword = choice((
-            text::keyword("supply0").to("supply0".to_string()),
-            text::keyword("strong0").to("strong0".to_string()),
-            text::keyword("highz0").to("highz0".to_string()),
-            text::keyword("pull0").to("pull0".to_string()),
-            text::keyword("weak0").to("weak0".to_string()),
-        ))
-        .padded_by(whitespace.clone());
-
-        let strength1_keyword = choice((
-            text::keyword("supply1").to("supply1".to_string()),
-            text::keyword("strong1").to("strong1".to_string()),
-            text::keyword("highz1").to("highz1".to_string()),
-            text::keyword("pull1").to("pull1".to_string()),
-            text::keyword("weak1").to("weak1".to_string()),
-        ))
-        .padded_by(whitespace.clone());
-
-        let drive_strength = just('(')
-            .padded_by(whitespace.clone())
-            .ignore_then(
-                // Try both orders: (strength0, strength1) or (strength1, strength0)
-                strength0_keyword
-                    .clone()
-                    .then_ignore(just(',').padded_by(whitespace.clone()))
-                    .then(strength1_keyword.clone())
-                    .map(|(s0, s1)| DriveStrength {
-                        strength0: s0,
-                        strength1: s1,
-                    })
-                    .or(strength1_keyword
-                        .clone()
-                        .then_ignore(just(',').padded_by(whitespace.clone()))
-                        .then(strength0_keyword.clone())
-                        .map(|(s1, s0)| DriveStrength {
-                            strength0: s0,
-                            strength1: s1,
-                        })),
-            )
-            .then_ignore(just(')').padded_by(whitespace.clone()));
-
-        // Variable declaration with optional range and initialization
-        // Examples:
-        //   wire a;
-        //   wire [7:0] data;
-        //   int count = 5;
-        //   logic [3:0] addr = 4'b0000;
-        //   logic a, b, c;  (multiple variables)
-        let _single_var = identifier_with_span
+        // Preprocessor directives
+        let define_directive = ws
             .clone()
+            .ignore_then(just('`'))
+            .ignore_then(text::keyword("define"))
+            .ignore_then(ws.clone())
+            .ignore_then(identifier.clone())
+            .then_ignore(ws.clone())
             .then(
-                just('=')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(expr.clone())
-                    .or_not(),
-            )
-            .map(|((name, name_span), initial_value)| (name, name_span, initial_value));
-
-        // Variable name that can't be "signed" or "unsigned" (for use after data types)
-        let single_var_not_signing = identifier_with_span
-            .clone()
-            .try_map(|(name, span), map_span| {
-                if name == "signed" || name == "unsigned" {
-                    Err(chumsky::error::Error::expected_input_found(
-                        map_span,
-                        vec![],
-                        Some('s'),
-                    ))
-                } else {
-                    Ok((name, span))
-                }
-            })
-            .then(unpacked_dimension.clone().repeated())
-            .then(
-                just('=')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(expr.clone())
-                    .or_not(),
-            )
-            .map(|(((name, name_span), unpacked_dims), initial_value)| {
-                (name, name_span, unpacked_dims, initial_value)
-            });
-
-        // Variable declaration with built-in types
-        let builtin_var_decl = data_type
-            .then(signing.clone().or_not())
-            .then(drive_strength.clone().or_not())
-            .then(delay.clone().or_not())
-            .then(range.clone().or_not())
-            .then(
-                single_var_not_signing
-                    .clone()
-                    .separated_by(just(',').padded_by(whitespace.clone()))
-                    .at_least(1),
-            )
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(
-                |(((((data_type, signing), drive_strength), delay), range), vars),
-                 span: std::ops::Range<usize>| {
-                    let (name, name_span, unpacked_dimensions, initial_value) =
-                        vars.into_iter().next().unwrap();
-                    ModuleItem::VariableDeclaration {
-                        data_type,
-                        signing,
-                        drive_strength,
-                        delay,
-                        range,
-                        name: name.clone(),
-                        name_span,
-                        unpacked_dimensions,
-                        initial_value,
-                        span: (span.start, span.end),
-                    }
-                },
-            );
-
-        // Variable declaration with built-in types only
-        let variable_declaration = builtin_var_decl
-            .recover_with(skip_then_retry_until([';']))
-            .padded_by(whitespace.clone());
-
-        // Class-typed variable declaration (separate parser to control ordering)
-        // This matches: <identifier> <identifier> ;
-        // But we need to make sure the first identifier is NOT a reserved keyword
-        let class_var_decl = identifier
-            .clone()
-            .then(identifier_with_span.clone())
-            .then(unpacked_dimension.clone().repeated())
-            .then(
-                just('=')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(expr.clone())
-                    .or_not(),
-            )
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(
-                |(((data_type, (name, name_span)), unpacked_dimensions), initial_value),
-                 span: std::ops::Range<usize>| {
-                    ModuleItem::VariableDeclaration {
-                        data_type,
-                        signing: None,
-                        drive_strength: None,
-                        delay: None,
-                        range: None,
-                        name,
-                        name_span,
-                        unpacked_dimensions,
-                        initial_value,
-                        span: (span.start, span.end),
-                    }
-                },
-            )
-            .padded_by(whitespace.clone());
-
-        // Port list in module header
-        let port_list = module_port
-            .separated_by(just(',').padded_by(whitespace.clone()))
-            .delimited_by(just('('), just(')'))
-            .or_not()
-            .map(|ports| ports.unwrap_or_default())
-            .padded_by(whitespace.clone());
-
-        // Statement parser for procedural blocks
-        let statement = recursive(|_statement| {
-            // Assignment operators
-            let assignment_op = choice((
-                just(">>>=").to(AssignmentOp::AShrAssign),
-                just("<<<=").to(AssignmentOp::AShlAssign),
-                just(">>=").to(AssignmentOp::ShrAssign),
-                just("<<=").to(AssignmentOp::ShlAssign),
-                just("+=").to(AssignmentOp::AddAssign),
-                just("-=").to(AssignmentOp::SubAssign),
-                just("*=").to(AssignmentOp::MulAssign),
-                just("/=").to(AssignmentOp::DivAssign),
-                just("%=").to(AssignmentOp::ModAssign),
-                just("&=").to(AssignmentOp::AndAssign),
-                just("|=").to(AssignmentOp::OrAssign),
-                just("^=").to(AssignmentOp::XorAssign),
-                just("=").to(AssignmentOp::Assign),
-            ))
-            .padded_by(whitespace.clone());
-
-            // Assignment statement (without 'assign' keyword)
-            let stmt_assignment = identifier_with_span
-                .clone()
-                .then(assignment_op)
-                .then(expr.clone())
-                .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map_with_span(
-                    |(((target, target_span), op), expr), span: std::ops::Range<usize>| {
-                        Statement::Assignment {
-                            target: target.clone(),
-                            target_span,
-                            op,
-                            expr,
-                            span: (span.start, span.end),
-                        }
-                    },
-                )
-                .padded_by(whitespace.clone());
-
-            // System call like $display(...)
-            let system_call = just('$')
-                .ignore_then(identifier.clone())
-                .then(
-                    expr.clone()
-                        .separated_by(just(',').padded_by(whitespace.clone()))
-                        .delimited_by(just('('), just(')'))
-                        .or_not()
-                        .map(|args| args.unwrap_or_default()),
-                )
-                .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map_with_span(
-                    |(name, args), span: std::ops::Range<usize>| Statement::SystemCall {
-                        name,
-                        args,
-                        span: (span.start, span.end),
-                    },
-                )
-                .padded_by(whitespace.clone());
-
-            // Case statement modifiers
-            let case_modifier = choice((
-                text::keyword("unique0").to("unique0".to_string()),
-                text::keyword("unique").to("unique".to_string()),
-                text::keyword("priority").to("priority".to_string()),
-            ))
-            .padded_by(whitespace.clone())
-            .or_not();
-
-            // Case type (case, casex, casez)
-            let case_type = choice((
-                text::keyword("casez").to("casez".to_string()),
-                text::keyword("casex").to("casex".to_string()),
-                text::keyword("case").to("case".to_string()),
-            ))
-            .padded_by(whitespace.clone());
-
-            // Case statement
-            let case_stmt = case_modifier
-                .then(case_type)
-                .then(expr.clone().delimited_by(
-                    just('(').padded_by(whitespace.clone()),
-                    just(')').padded_by(whitespace.clone()),
-                ))
-                .then_ignore(
-                    // Case items - simplified parser that just skips to endcase
-                    filter(|c| *c != 'e')
-                        .repeated()
-                        .then(text::keyword("endcase"))
-                        .padded_by(whitespace.clone()),
-                )
-                .map_with_span(
-                    |((modifier, case_type), case_expr), span: std::ops::Range<usize>| {
-                        Statement::CaseStatement {
-                            modifier,
-                            case_type,
-                            expr: case_expr,
-                            span: (span.start, span.end),
-                        }
-                    },
-                )
-                .padded_by(whitespace.clone());
-
-            // Assert property statement
-            let assert_property = text::keyword("assert")
-                .padded_by(whitespace.clone())
-                .ignore_then(text::keyword("property").padded_by(whitespace.clone()))
-                .ignore_then(expr.clone().delimited_by(
-                    just('(').padded_by(whitespace.clone()),
-                    just(')').padded_by(whitespace.clone()),
-                ))
-                .then(
-                    text::keyword("else")
-                        .padded_by(whitespace.clone())
-                        .ignore_then(
-                            just('$')
-                                .ignore_then(identifier.clone())
-                                .then(
-                                    expr.clone()
-                                        .separated_by(just(',').padded_by(whitespace.clone()))
-                                        .delimited_by(just('('), just(')'))
-                                        .or_not()
-                                        .map(|args| args.unwrap_or_default()),
-                                )
-                                .map_with_span(|(name, args), span: std::ops::Range<usize>| {
-                                    Statement::SystemCall {
-                                        name,
-                                        args,
-                                        span: (span.start, span.end),
-                                    }
-                                }),
-                        )
-                        .or_not(),
-                )
-                .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map_with_span(
-                    |(property_expr, action_block), span: std::ops::Range<usize>| {
-                        Statement::AssertProperty {
-                            property_expr,
-                            action_block: action_block.map(Box::new),
-                            span: (span.start, span.end),
-                        }
-                    },
-                )
-                .padded_by(whitespace.clone());
-
-            // Expression statement (for method calls, function calls, etc.)
-            let expr_stmt = expr
-                .clone()
-                .then_ignore(just(';').padded_by(whitespace.clone()))
-                .map_with_span(|expr, span: std::ops::Range<usize>| {
-                    Statement::ExpressionStatement {
-                        expr,
-                        span: (span.start, span.end),
-                    }
-                })
-                .padded_by(whitespace.clone());
-
-            choice((
-                assert_property,
-                case_stmt,
-                stmt_assignment,
-                system_call,
-                expr_stmt,
-            ))
-        });
-
-        // Procedural block type
-        let block_type = choice((
-            just("initial").to(ProceduralBlockType::Initial),
-            just("final").to(ProceduralBlockType::Final),
-            just("always_comb").to(ProceduralBlockType::AlwaysComb),
-            just("always_ff").to(ProceduralBlockType::AlwaysFF),
-            just("always").to(ProceduralBlockType::Always),
-        ))
-        .padded_by(whitespace.clone());
-
-        // Procedural block
-        let procedural_block = block_type
-            .then_ignore(
-                // Optional event control like @(posedge clk) or @(a)
-                just('@')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(
-                        just('(')
-                            .ignore_then(filter(|c| *c != ')').repeated())
-                            .then_ignore(just(')')),
-                    )
-                    .or_not(),
-            )
-            .then(choice((
-                // Multiple statements with begin/end
-                statement.clone().repeated().delimited_by(
-                    just("begin").padded_by(whitespace.clone()),
-                    just("end").padded_by(whitespace.clone()),
-                ),
-                // Single statement without begin/end
-                statement.clone().map(|s| vec![s]),
-            )))
-            .map_with_span(|(block_type, statements), span: std::ops::Range<usize>| {
-                ModuleItem::ProceduralBlock {
-                    block_type,
-                    statements,
-                    span: (span.start, span.end),
-                }
-            })
-            .padded_by(whitespace.clone());
-
-        // Preprocessor directive parsers
-        let define_directive = just('`')
-            .ignore_then(just("define"))
-            .padded_by(whitespace.clone())
-            .ignore_then(identifier_with_span.clone())
-            .then(
-                // Optional parameter list
                 just('(')
                     .ignore_then(
                         identifier
                             .clone()
-                            .separated_by(just(',').padded_by(whitespace.clone())),
+                            .separated_by(just(',').padded_by(ws.clone())),
                     )
                     .then_ignore(just(')'))
-                    .or_not()
-                    .padded_by(whitespace.clone()),
+                    .then_ignore(ws.clone())
+                    .or_not(),
             )
-            .then(
-                // Macro value - everything until end of line
-                filter(|c: &char| *c != '\n').repeated().collect::<String>(),
-            )
-            .map_with_span(
-                |(((name, name_span), params), value), span: std::ops::Range<usize>| {
-                    ModuleItem::DefineDirective {
-                        name,
-                        name_span,
-                        parameters: params.unwrap_or_default(),
-                        value: value.trim().to_string(),
-                        span: (span.start, span.end),
-                    }
+            .then(filter(|c: &char| *c != '\n').repeated().collect::<String>())
+            .map(
+                |((name, params), value)| ParsedModuleItem::DefineDirective {
+                    name,
+                    parameters: params.unwrap_or_default(),
+                    value: value.trim().to_string(),
                 },
             );
 
-        let include_directive = just('`')
-            .ignore_then(just("include"))
-            .padded_by(whitespace.clone())
+        let include_directive = ws
+            .clone()
+            .ignore_then(just('`'))
+            .ignore_then(text::keyword("include"))
+            .then_ignore(ws.clone())
             .ignore_then(
                 // Parse "filename" or <filename>
                 choice((
@@ -1395,264 +1353,744 @@ impl SystemVerilogParser {
                         .repeated()
                         .collect::<String>()
                         .delimited_by(just('<'), just('>')),
-                ))
-                .map_with_span(|path: String, span: std::ops::Range<usize>| {
-                    (path, (span.start, span.end))
-                }),
+                )),
             )
-            .map_with_span(|(path, path_span), span: std::ops::Range<usize>| {
-                ModuleItem::IncludeDirective {
-                    path,
-                    path_span,
-                    resolved_path: None, // Will be resolved later
-                    span: (span.start, span.end),
-                }
-            });
+            .map(|path| ParsedModuleItem::IncludeDirective { path });
 
-        // Class qualifier parser (local or protected)
-        let class_qualifier = || {
-            choice((
-                just("local").to(ClassQualifier::Local),
-                just("protected").to(ClassQualifier::Protected),
-            ))
-            .padded_by(whitespace.clone())
-        };
-
-        // Class property parser
-        let class_property = class_qualifier()
-            .or_not()
-            .then(identifier.clone()) // data_type
-            .then(identifier_with_span.clone()) // name
-            .then(unpacked_dimension.clone().repeated())
-            .then(
-                just('=')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(expr.clone())
-                    .or_not(),
-            )
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .map_with_span(
-                |(
-                    (((qualifier, data_type), (name, name_span)), unpacked_dimensions),
-                    initial_value,
-                ),
-                 span: std::ops::Range<usize>| {
-                    ClassItem::Property {
-                        qualifier,
-                        data_type,
-                        name,
-                        name_span,
-                        unpacked_dimensions,
-                        initial_value,
-                        span: (span.start, span.end),
-                    }
+        // Port declaration
+        let port_decl = ws
+            .clone()
+            .ignore_then(port_direction.clone())
+            .then_ignore(ws.clone())
+            .then(type_keyword.clone()) // port type (wire, reg, logic, etc.)
+            .then_ignore(ws.clone())
+            .then(identifier.clone()) // port name
+            .then_ignore(ws.clone())
+            .then_ignore(just(';'))
+            .map(
+                |((direction, port_type), name)| ParsedModuleItem::PortDeclaration {
+                    direction,
+                    port_type,
+                    name,
                 },
             );
 
-        // Class method parser
-        let class_method = class_qualifier()
-            .or_not()
-            .then_ignore(just("function").padded_by(whitespace.clone()))
-            .then(identifier.clone().then_ignore(whitespace.clone()).or_not()) // return_type (optional, defaults to void)
-            .then(identifier_with_span.clone()) // method name
+        // Port: input [3:0] a, output b, output reg data, or just "clk" (non-ANSI)
+        let port = port_direction
+            .clone()
+            .then_ignore(ws.clone())
             .then(
-                // parameter list
-                just('(')
-                    .padded_by(whitespace.clone())
-                    .ignore_then(just(')'))
-                    .to(Vec::new())
-                    .or(just('(')
-                        .padded_by(whitespace.clone())
-                        .ignore_then(
-                            identifier
-                                .clone()
-                                .separated_by(just(',').padded_by(whitespace.clone())),
+                // Optional type keyword (e.g., 'reg', 'wire')
+                type_keyword.clone().then_ignore(ws.clone()).or_not(),
+            )
+            .then(range.clone().or_not())
+            .then_ignore(ws.clone())
+            .then(identifier.clone())
+            .map(|(((direction, _type), range), name)| Port {
+                name: name.clone(),
+                name_span: (0, 0),
+                direction: Some(direction),
+                range,
+                span: (0, 0),
+            })
+            .or(
+                // Non-ANSI style: just port name without direction
+                identifier.clone().map(|name| Port {
+                    name: name.clone(),
+                    name_span: (0, 0),
+                    direction: None,
+                    range: None,
+                    span: (0, 0),
+                }),
+            );
+
+        // Port list: (input a, input b) or ()
+        let port_list = port
+            .separated_by(just(',').padded_by(ws.clone()))
+            .allow_trailing()
+            .delimited_by(
+                just('(').padded_by(ws.clone()),
+                just(')').padded_by(ws.clone()),
+            );
+
+        // Statement parser (for inside initial/always blocks)
+        let statement = recursive(|_statement| {
+            // Assignment operators - order matters! Longest first
+            let assign_op = choice((
+                just(">>>=").to(AssignmentOp::AShrAssign),
+                just("<<<=").to(AssignmentOp::AShlAssign),
+                just(">>=").to(AssignmentOp::ShrAssign),
+                just("<<=").to(AssignmentOp::ShlAssign),
+                just("^=").to(AssignmentOp::XorAssign),
+                just("+=").to(AssignmentOp::AddAssign),
+                just("-=").to(AssignmentOp::SubAssign),
+                just("*=").to(AssignmentOp::MulAssign),
+                just("/=").to(AssignmentOp::DivAssign),
+                just("%=").to(AssignmentOp::ModAssign),
+                just("&=").to(AssignmentOp::AndAssign),
+                just("|=").to(AssignmentOp::OrAssign),
+                just("=").to(AssignmentOp::Assign),
+            ));
+
+            // Statement-level assignment: a ^= b;
+            let stmt_assignment = ws
+                .clone()
+                .ignore_then(expr.clone())
+                .then_ignore(ws.clone())
+                .then(assign_op)
+                .then_ignore(ws.clone())
+                .then(expr.clone())
+                .then_ignore(ws.clone())
+                .then_ignore(just(';'))
+                .map(|((target, op), expr)| ParsedStatement::Assignment { target, op, expr });
+
+            // System call: $display(...);
+            let system_call = ws
+                .clone()
+                .ignore_then(just('$'))
+                .ignore_then(identifier.clone())
+                .then(
+                    expr.clone()
+                        .separated_by(just(',').padded_by(ws.clone()))
+                        .delimited_by(
+                            just('(').padded_by(ws.clone()),
+                            just(')').padded_by(ws.clone()),
                         )
-                        .then_ignore(just(')').padded_by(whitespace.clone()))),
-            )
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .then(
-                // function body - statements until endfunction
-                statement
-                    .recover_with(skip_then_retry_until(['$', 'e']))
-                    .repeated(),
-            )
-            .then_ignore(just("endfunction").padded_by(whitespace.clone()))
-            .map_with_span(
-                |((((qualifier, return_type), (name, name_span)), _parameters), body),
-                 span: std::ops::Range<usize>| {
-                    ClassItem::Method {
+                        .or_not()
+                        .map(|args| args.unwrap_or_default()),
+                )
+                .then_ignore(just(';').padded_by(ws.clone()))
+                .map(|(name, args)| ParsedStatement::SystemCall { name, args });
+
+            // Case statement modifiers
+            let case_modifier = choice((
+                text::keyword("unique0").to("unique0".to_string()),
+                text::keyword("unique").to("unique".to_string()),
+                text::keyword("priority").to("priority".to_string()),
+            ))
+            .padded_by(ws.clone())
+            .or_not();
+
+            // Case type
+            let case_type = choice((
+                text::keyword("casez").to("casez".to_string()),
+                text::keyword("casex").to("casex".to_string()),
+                text::keyword("case").to("case".to_string()),
+            ))
+            .padded_by(ws.clone());
+
+            // Case statement (simplified - just skip to endcase)
+            let case_stmt = case_modifier
+                .then(case_type)
+                .then(expr.clone().delimited_by(
+                    just('(').padded_by(ws.clone()),
+                    just(')').padded_by(ws.clone()),
+                ))
+                .then_ignore(
+                    filter(|c| *c != 'e')
+                        .repeated()
+                        .then(text::keyword("endcase"))
+                        .padded_by(ws.clone()),
+                )
+                .map(
+                    |((modifier, case_type), case_expr)| ParsedStatement::CaseStatement {
+                        modifier,
+                        case_type,
+                        expr: case_expr,
+                    },
+                );
+
+            // Assert property statement
+            let assert_property = text::keyword("assert")
+                .padded_by(ws.clone())
+                .ignore_then(text::keyword("property").padded_by(ws.clone()))
+                .ignore_then(expr.clone().delimited_by(
+                    just('(').padded_by(ws.clone()),
+                    just(')').padded_by(ws.clone()),
+                ))
+                .then(
+                    text::keyword("else")
+                        .padded_by(ws.clone())
+                        .ignore_then(
+                            just('$')
+                                .ignore_then(identifier.clone())
+                                .then(
+                                    expr.clone()
+                                        .separated_by(just(',').padded_by(ws.clone()))
+                                        .delimited_by(just('('), just(')'))
+                                        .or_not()
+                                        .map(|args| args.unwrap_or_default()),
+                                )
+                                .map(|(name, args)| ParsedStatement::SystemCall { name, args }),
+                        )
+                        .or_not(),
+                )
+                .then_ignore(just(';').padded_by(ws.clone()))
+                .map(
+                    |(property_expr, action_block)| ParsedStatement::AssertProperty {
+                        property_expr,
+                        action_block: action_block.map(Box::new),
+                    },
+                );
+
+            // Expression statement (for function calls)
+            let expr_stmt = expr
+                .clone()
+                .then_ignore(just(';').padded_by(ws.clone()))
+                .map(|expr| ParsedStatement::ExpressionStatement { expr });
+
+            choice((
+                assert_property,
+                case_stmt,
+                system_call,
+                stmt_assignment,
+                expr_stmt,
+            ))
+        });
+
+        // Unpacked dimension: [10] or []
+        let unpacked_dim = just('[')
+            .padded_by(ws.clone())
+            .ignore_then(choice((number.clone(), identifier.clone())).or_not())
+            .then_ignore(ws.clone())
+            .then_ignore(just(']'))
+            .map(|dim| match dim {
+                None => UnpackedDimension::Dynamic,
+                Some(size) => UnpackedDimension::FixedSize(size),
+            });
+
+        // Class qualifier
+        let class_qualifier = choice((
+            text::keyword("local").to(ClassQualifier::Local),
+            text::keyword("protected").to(ClassQualifier::Protected),
+        ));
+
+        // Class item parser
+        let class_item = recursive(|_class_item| {
+            // Class property
+            let class_property = ws
+                .clone()
+                .ignore_then(class_qualifier.clone().or_not())
+                .then_ignore(ws.clone())
+                .then(choice((type_keyword.clone(), identifier.clone())))
+                .then_ignore(ws.clone())
+                .then(identifier.clone())
+                .then_ignore(ws.clone())
+                .then(unpacked_dim.clone().repeated())
+                .then_ignore(ws.clone())
+                .then(
+                    just('=')
+                        .padded_by(ws.clone())
+                        .ignore_then(expr.clone())
+                        .or_not(),
+                )
+                .then_ignore(ws.clone())
+                .then_ignore(just(';'))
+                .map(
+                    |((((qualifier, data_type), name), unpacked), initial_value)| {
+                        ParsedClassItem::Property {
+                            qualifier,
+                            data_type,
+                            name,
+                            unpacked_dimensions: unpacked,
+                            initial_value,
+                        }
+                    },
+                );
+
+            // Class method
+            let class_method = ws
+                .clone()
+                .ignore_then(class_qualifier.clone().or_not())
+                .then_ignore(ws.clone())
+                .then_ignore(text::keyword("function"))
+                .then_ignore(ws.clone())
+                .then(choice((type_keyword.clone(), identifier.clone())).or_not()) // return type (optional)
+                .then_ignore(ws.clone())
+                .then(identifier.clone()) // method name
+                .then_ignore(ws.clone())
+                .then(
+                    // parameter list
+                    just('(')
+                        .padded_by(ws.clone())
+                        .ignore_then(just(')'))
+                        .to(Vec::new())
+                        .or(just('(')
+                            .padded_by(ws.clone())
+                            .ignore_then(
+                                identifier
+                                    .clone()
+                                    .separated_by(just(',').padded_by(ws.clone())),
+                            )
+                            .then_ignore(just(')').padded_by(ws.clone()))),
+                )
+                .then_ignore(just(';').padded_by(ws.clone()))
+                .then(
+                    // function body - statements until endfunction
+                    statement.clone().repeated(),
+                )
+                .then_ignore(ws.clone())
+                .then_ignore(text::keyword("endfunction"))
+                .map(|((((qualifier, return_type), name), parameters), body)| {
+                    ParsedClassItem::Method {
                         qualifier,
                         return_type,
                         name,
-                        name_span,
-                        parameters: Vec::new(), // simplified for now
+                        parameters,
                         body,
-                        span: (span.start, span.end),
                     }
+                });
+
+            choice((class_property, class_method))
+        });
+
+        // Class declaration
+        let class_decl = ws
+            .clone()
+            .ignore_then(text::keyword("class"))
+            .then_ignore(ws.clone())
+            .ignore_then(identifier.clone())
+            .then_ignore(ws.clone())
+            .then(
+                text::keyword("extends")
+                    .ignore_then(ws.clone())
+                    .ignore_then(identifier.clone())
+                    .or_not(),
+            )
+            .then_ignore(ws.clone())
+            .then_ignore(just(';'))
+            .then_ignore(ws.clone())
+            .then(class_item.repeated())
+            .then_ignore(ws.clone())
+            .then_ignore(text::keyword("endclass"))
+            .then_ignore(ws.clone())
+            .map(
+                |((name, extends), items)| ParsedModuleItem::ClassDeclaration {
+                    name,
+                    extends,
+                    items,
                 },
             );
 
-        // Class item
-        let class_item = choice((class_method, class_property));
+        // Module item parser (recursive for module body)
+        let module_item = recursive(|_module_item| {
+            // Signing keyword
+            let signing = choice((
+                text::keyword("signed").to("signed"),
+                text::keyword("unsigned").to("unsigned"),
+            ));
 
-        // Class body
-        let class_body = class_item
-            .recover_with(skip_then_retry_until([';', 'l', 'p', 'f', 'e']))
-            .repeated();
+            // Drive strength: (supply0, supply1), (strong0, strong1), etc.
+            let strength_keyword = choice((
+                text::keyword("supply0").to("supply0"),
+                text::keyword("supply1").to("supply1"),
+                text::keyword("strong0").to("strong0"),
+                text::keyword("strong1").to("strong1"),
+                text::keyword("pull0").to("pull0"),
+                text::keyword("pull1").to("pull1"),
+                text::keyword("weak0").to("weak0"),
+                text::keyword("weak1").to("weak1"),
+                text::keyword("highz0").to("highz0"),
+                text::keyword("highz1").to("highz1"),
+            ));
 
-        // Class declaration
-        let class_declaration = just("class")
-            .padded_by(whitespace.clone())
-            .ignore_then(identifier_with_span.clone())
+            let drive_strength = just('(')
+                .padded_by(ws.clone())
+                .ignore_then(strength_keyword.clone())
+                .then_ignore(just(',').padded_by(ws.clone()))
+                .then(strength_keyword.clone())
+                .then_ignore(just(')').padded_by(ws.clone()))
+                .map(|(s0, s1)| DriveStrength {
+                    strength0: s0.to_string(),
+                    strength1: s1.to_string(),
+                });
+
+            // Union/struct type
+            let union_struct_type = choice((
+                text::keyword("union").to("union".to_string()),
+                text::keyword("struct").to("struct".to_string()),
+            ))
+            .then_ignore(ws.clone())
+            .then(text::keyword("packed").or_not())
+            .then_ignore(ws.clone())
+            .then_ignore(just('{'))
+            .then_ignore(ws.clone())
             .then(
-                just("extends")
-                    .padded_by(whitespace.clone())
-                    .ignore_then(identifier.clone())
-                    .or_not(),
-            )
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .then(class_body)
-            .then_ignore(just("endclass").padded_by(whitespace.clone()))
-            .map_with_span(
-                |(((name, name_span), extends), items), span: std::ops::Range<usize>| {
-                    ModuleItem::ClassDeclaration {
-                        name: name.clone(),
-                        name_span,
-                        extends,
-                        items,
-                        span: (span.start, span.end),
-                    }
-                },
-            )
-            .padded_by(whitespace.clone());
-
-        // Concurrent assertion (module-level assert property)
-        // For now, just parse the structure without detailed validation
-        let concurrent_assertion = text::keyword("assert")
-            .padded_by(whitespace.clone())
-            .ignore_then(text::keyword("property").padded_by(whitespace.clone()))
-            .then_ignore(
-                filter(|c| *c != ';')
+                // Parse struct/union members: type name;
+                type_keyword
+                    .clone()
+                    .or(identifier.clone())
+                    .then_ignore(ws.clone())
+                    .then(range.clone().or_not())
+                    .then_ignore(ws.clone())
+                    .then(identifier.clone())
+                    .then_ignore(ws.clone())
+                    .then_ignore(just(';'))
+                    .then_ignore(ws.clone())
                     .repeated()
-                    .then_ignore(just(';').padded_by(whitespace.clone())),
+                    .at_least(1),
             )
-            .map_with_span(
-                |_, span: std::ops::Range<usize>| ModuleItem::ConcurrentAssertion {
-                    statement: Statement::ExpressionStatement {
-                        expr: Expression::Identifier(
-                            "placeholder".to_string(),
-                            (span.start, span.end),
-                        ),
-                        span: (span.start, span.end),
-                    },
-                    span: (span.start, span.end),
-                },
-            )
-            .padded_by(whitespace.clone());
+            .then_ignore(ws.clone())
+            .then_ignore(just('}'))
+            .map(|((union_or_struct, _packed), _members)| {
+                // For now, just return "union" or "struct" as the type name
+                // A full implementation would store the member information
+                union_or_struct
+            });
 
-        // Event control (e.g., @(posedge clk) or @(clk1 or clk2))
-        // For now, we capture it as a placeholder expression
-        let event_control = just('@').padded_by(whitespace.clone()).ignore_then(
-            just('(')
-                .padded_by(whitespace.clone())
-                .ignore_then(
-                    // Parse nested parentheses correctly
-                    filter(|c| *c != ')' && *c != '(')
-                        .or(just('(')
-                            .then(filter(|c| *c != ')').repeated())
-                            .then(just(')'))
-                            .map(|_| ' '))
-                        .repeated()
-                        .collect::<String>()
-                        .map(|s| Expression::Identifier(format!("@({})", s.trim()), (0, 0))),
+            // Variable declaration: wire w; or int unsigned a = 12; or bit [7:0] arr[10]; or logic a, b, c;
+            // or union { ... } un;
+            let var_decl = ws
+                .clone()
+                .ignore_then(choice((
+                    union_struct_type.clone(),
+                    type_keyword.clone(),
+                    identifier.clone(),
+                )))
+                .then_ignore(ws.clone())
+                .then(signing.or_not())
+                .then_ignore(ws.clone())
+                .then(drive_strength.or_not())
+                .then_ignore(ws.clone())
+                .then(range.clone().or_not()) // Packed dimension [7:0]
+                .then_ignore(ws.clone())
+                .then(delay.clone().or_not())
+                .then_ignore(ws.clone())
+                .then(
+                    identifier
+                        .clone()
+                        .then_ignore(ws.clone())
+                        .then(unpacked_dim.clone().repeated()) // Unpacked dimensions [10][20]
+                        .then_ignore(ws.clone())
+                        .then(
+                            just('=')
+                                .padded_by(ws.clone())
+                                .ignore_then(expr.clone())
+                                .or_not(),
+                        )
+                        .separated_by(just(',').padded_by(ws.clone()))
+                        .at_least(1),
                 )
-                .then_ignore(just(')').padded_by(whitespace.clone())),
-        );
+                .then_ignore(ws.clone())
+                .then_ignore(just(';'))
+                .map(
+                    |(
+                        ((((data_type, signing), drive_strength), packed_range), delay),
+                        variables,
+                    )| {
+                        // For now, return only the first variable as VariableDeclaration
+                        // In a real implementation, we'd need to handle multiple declarations
+                        let ((name, unpacked), initial_value) = &variables[0];
+                        ParsedModuleItem::VariableDeclaration {
+                            data_type: data_type.to_string(),
+                            signing: signing.map(|s| s.to_string()),
+                            drive_strength,
+                            delay,
+                            range: packed_range,
+                            name: name.clone(),
+                            unpacked_dimensions: unpacked.clone(),
+                            initial_value: initial_value.clone(),
+                        }
+                    },
+                );
 
-        // Global clocking declaration
+            // Continuous assignment: assign #delay? target = expr;
+            let assignment = ws
+                .clone()
+                .ignore_then(text::keyword("assign"))
+                .then_ignore(ws.clone())
+                .ignore_then(delay.clone().or_not())
+                .then_ignore(ws.clone())
+                .then(expr.clone())
+                .then_ignore(ws.clone())
+                .then_ignore(just('='))
+                .then_ignore(ws.clone())
+                .then(expr.clone())
+                .then_ignore(ws.clone())
+                .then_ignore(just(';'))
+                .map(|((delay, target), expr)| ParsedModuleItem::Assignment {
+                    delay,
+                    target,
+                    expr,
+                });
+
+            // Procedural block type
+            let block_type = choice((
+                text::keyword("always_comb").to(ProceduralBlockType::AlwaysComb),
+                text::keyword("always_ff").to(ProceduralBlockType::AlwaysFF),
+                text::keyword("always").to(ProceduralBlockType::Always),
+                text::keyword("initial").to(ProceduralBlockType::Initial),
+                text::keyword("final").to(ProceduralBlockType::Final),
+            ));
+
+            // Procedural block: initial/always/always_comb/always_ff/final begin...end
+            let procedural_block = ws
+                .clone()
+                .ignore_then(block_type)
+                .then_ignore(ws.clone())
+                .then_ignore(
+                    // Optional event control like @(posedge clk)
+                    just('@')
+                        .padded_by(ws.clone())
+                        .ignore_then(
+                            just('(')
+                                .ignore_then(filter(|c| *c != ')').repeated())
+                                .then_ignore(just(')')),
+                        )
+                        .or_not(),
+                )
+                .then_ignore(ws.clone())
+                .then(choice((
+                    // Multiple statements with begin/end
+                    text::keyword("begin")
+                        .ignore_then(ws.clone())
+                        .ignore_then(statement.clone().repeated())
+                        .then_ignore(ws.clone())
+                        .then_ignore(text::keyword("end")),
+                    // Single statement without begin/end
+                    statement.clone().map(|s| vec![s]),
+                )))
+                .map(
+                    |(block_type, statements)| ParsedModuleItem::ProceduralBlock {
+                        block_type,
+                        statements,
+                    },
+                );
+
+            // Global clocking (needs to be before var_decl to avoid conflicts)
+            let global_clocking_item = text::keyword("global")
+                .padded_by(ws.clone())
+                .ignore_then(text::keyword("clocking"))
+                .then_ignore(ws.clone())
+                .ignore_then(identifier.clone().or_not())
+                .then_ignore(ws.clone())
+                .then(
+                    // Event control @(...)
+                    just('@')
+                        .padded_by(ws.clone())
+                        .ignore_then(
+                            just('(')
+                                .ignore_then(filter(|c| *c != ')').repeated().collect::<String>())
+                                .then_ignore(just(')')),
+                        )
+                        .map(|s| ParsedExpression::Identifier(format!("@({})", s), (0, 0))),
+                )
+                .then_ignore(ws.clone())
+                .then_ignore(just(';'))
+                .then_ignore(ws.clone())
+                .then_ignore(text::keyword("endclocking"))
+                .then_ignore(ws.clone())
+                .then(
+                    just(':')
+                        .padded_by(ws.clone())
+                        .ignore_then(identifier.clone())
+                        .or_not(),
+                )
+                .map(|((identifier, clocking_event), end_label)| {
+                    ParsedModuleItem::GlobalClocking {
+                        identifier,
+                        clocking_event,
+                        end_label,
+                    }
+                });
+
+            choice((
+                define_directive.clone(),
+                include_directive.clone(),
+                global_clocking_item,
+                concurrent_assertion.clone(),
+                port_decl.clone(),
+                class_decl.clone(),
+                var_decl,
+                assignment,
+                procedural_block,
+            ))
+        });
+
+        // Global clocking (for top-level)
         let global_clocking = text::keyword("global")
-            .padded_by(whitespace.clone())
-            .ignore_then(text::keyword("clocking").padded_by(whitespace.clone()))
-            .ignore_then(identifier_with_span.clone().or_not())
-            .then(event_control.clone())
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .then_ignore(text::keyword("endclocking").padded_by(whitespace.clone()))
+            .padded_by(ws.clone())
+            .ignore_then(text::keyword("clocking"))
+            .then_ignore(ws.clone())
+            .ignore_then(identifier.clone().or_not())
+            .then_ignore(ws.clone())
+            .then(
+                // Event control @(...)
+                just('@')
+                    .padded_by(ws.clone())
+                    .ignore_then(
+                        just('(')
+                            .ignore_then(filter(|c| *c != ')').repeated().collect::<String>())
+                            .then_ignore(just(')')),
+                    )
+                    .map(|s| ParsedExpression::Identifier(format!("@({})", s), (0, 0))),
+            )
+            .then_ignore(ws.clone())
+            .then_ignore(just(';'))
+            .then_ignore(ws.clone())
+            .then_ignore(text::keyword("endclocking"))
+            .then_ignore(ws.clone())
             .then(
                 just(':')
-                    .padded_by(whitespace.clone())
+                    .padded_by(ws.clone())
                     .ignore_then(identifier.clone())
                     .or_not(),
             )
-            .map_with_span(
-                |((opt_id, event), end_label), span: std::ops::Range<usize>| {
-                    ModuleItem::GlobalClocking {
-                        identifier: opt_id.as_ref().map(|(id, _)| id.clone()),
-                        identifier_span: opt_id.as_ref().map(|(_, s)| *s),
-                        clocking_event: event,
-                        end_label,
-                        span: (span.start, span.end),
-                    }
+            .map(
+                |((identifier, clocking_event), end_label)| ParsedModuleItem::GlobalClocking {
+                    identifier,
+                    clocking_event,
+                    end_label,
                 },
-            )
-            .padded_by(whitespace.clone());
+            );
 
-        // Module item - order matters! Put more specific parsers first
-        // class_var_decl is last because it can match any two identifiers
-        let module_item = choice((
-            define_directive.clone(),
-            include_directive.clone(),
-            class_declaration.clone(),
+        // Module declaration: module <name> (ports); items endmodule
+        let module_decl = ws
+            .clone()
+            .ignore_then(text::keyword("module"))
+            .then_ignore(ws.clone())
+            .ignore_then(identifier.clone())
+            .then_ignore(ws.clone())
+            .then(port_list.or_not())
+            .then_ignore(ws.clone())
+            .then_ignore(just(';'))
+            .then_ignore(ws.clone())
+            .then(module_item.repeated())
+            .then_ignore(ws.clone())
+            .then_ignore(text::keyword("endmodule"))
+            .then_ignore(ws.clone())
+            .map(
+                |((name, ports), items)| ParsedModuleItem::ModuleDeclaration {
+                    name,
+                    ports: ports.unwrap_or_default(),
+                    items,
+                },
+            );
+
+        // Top-level items (modules, classes, preprocessor directives)
+        let top_level = choice((
+            define_directive,
+            include_directive,
+            class_decl,
+            module_decl,
             global_clocking,
             concurrent_assertion,
-            port_declaration,
-            variable_declaration,
-            assignment,
-            procedural_block,
-            class_var_decl, // Must be last - matches any two identifiers
+            port_decl,
         ));
 
-        // Module body with error recovery - try to parse multiple statements
-        let module_body = module_item
-            .recover_with(skip_then_retry_until([';', 'a', 'i', 'o', 'e'])) // Skip to next statement or endmodule
-            .repeated();
-
-        // Module declaration
-        let module_declaration = just("module")
-            .padded_by(whitespace.clone())
-            .ignore_then(identifier_with_span.clone())
-            .then(port_list)
-            .then_ignore(just(';').padded_by(whitespace.clone()))
-            .then(module_body)
-            .then_ignore(just("endmodule").padded_by(whitespace.clone()))
-            .map_with_span(
-                |(((name, name_span), ports), items), span: std::ops::Range<usize>| {
-                    ModuleItem::ModuleDeclaration {
-                        name: name.clone(),
-                        name_span,
-                        ports,
-                        items,
-                        span: (span.start, span.end),
-                    }
-                },
-            )
-            .padded_by(whitespace.clone());
-
-        // Top-level items (modules, classes and preprocessor directives)
-        let top_level_item = choice((
-            define_directive.clone(),
-            include_directive.clone(),
-            class_declaration,
-            module_declaration,
-        ));
-
-        // Top-level source unit
-        let source_unit = top_level_item
-            .repeated()
+        ws.clone()
+            .ignore_then(top_level.repeated())
+            .then_ignore(ws.clone())
             .then_ignore(end())
-            .map(|items| SourceUnit { items })
-            .padded_by(whitespace);
+    }
+}
 
-        source_unit
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_module() {
+        let parser = SystemVerilogParser::new(vec![], HashMap::new());
+        let content = "module top(); endmodule";
+        let result = parser.parse_content(content);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let source_unit = result.unwrap();
+        assert_eq!(source_unit.items.len(), 1);
+        let item = source_unit.module_item_arena.get(source_unit.items[0]);
+        match item {
+            ModuleItem::ModuleDeclaration { name, .. } => {
+                assert_eq!(name, "top");
+            }
+            _ => panic!("Expected ModuleDeclaration"),
+        }
+    }
+
+    #[test]
+    fn test_module_with_assignment() {
+        let parser = SystemVerilogParser::new(vec![], HashMap::new());
+        let content = "module top(input a, input b);
+            wire w;
+            assign w = a & b;
+            endmodule";
+        let result = parser.parse_content(content);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let source_unit = result.unwrap();
+        assert_eq!(source_unit.items.len(), 1);
+
+        let item = source_unit.module_item_arena.get(source_unit.items[0]);
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name, ports, items, ..
+            } => {
+                assert_eq!(name, "top");
+                assert_eq!(ports.len(), 2);
+                assert_eq!(items.len(), 2);
+
+                // Check wire declaration - items are now refs into the arena
+                let item0 = source_unit.module_item_arena.get(items[0]);
+                match item0 {
+                    ModuleItem::VariableDeclaration {
+                        data_type, name, ..
+                    } => {
+                        assert_eq!(data_type, "wire");
+                        assert_eq!(name, "w");
+                    }
+                    _ => panic!("Expected VariableDeclaration"),
+                }
+
+                // Check assignment
+                let item1 = source_unit.module_item_arena.get(items[1]);
+                match item1 {
+                    ModuleItem::Assignment { target, expr, .. } => {
+                        // Target should be 'w'
+                        let target_expr = source_unit.expr_arena.get(*target);
+                        assert!(matches!(target_expr, Expression::Identifier(n, _) if n == "w"));
+
+                        // Expr should be 'a & b'
+                        let expr_expr = source_unit.expr_arena.get(*expr);
+                        assert!(matches!(
+                            expr_expr,
+                            Expression::Binary {
+                                op: BinaryOp::And,
+                                ..
+                            }
+                        ));
+                    }
+                    _ => panic!("Expected Assignment"),
+                }
+            }
+            _ => panic!("Expected ModuleDeclaration"),
+        }
+    }
+
+    #[test]
+    fn test_assignment_with_delay() {
+        let parser = SystemVerilogParser::new(vec![], HashMap::new());
+        let content = "module top(input a, input b);
+            wire w;
+            assign #10 w = a & b;
+            endmodule";
+        let result = parser.parse_content(content);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let source_unit = result.unwrap();
+
+        let item = source_unit.module_item_arena.get(source_unit.items[0]);
+        match item {
+            ModuleItem::ModuleDeclaration { items, .. } => {
+                let item1 = source_unit.module_item_arena.get(items[1]);
+                match item1 {
+                    ModuleItem::Assignment { delay, .. } => {
+                        assert!(delay.is_some(), "Expected delay");
+                        match delay {
+                            Some(Delay::Value(v)) => assert_eq!(v, "10"),
+                            _ => panic!("Expected Delay::Value"),
+                        }
+                    }
+                    _ => panic!("Expected Assignment"),
+                }
+            }
+            _ => panic!("Expected ModuleDeclaration"),
+        }
     }
 }

@@ -109,9 +109,10 @@ mod specific_tests {
         let result = parser.parse_content(&content).unwrap();
         assert_eq!(result.items.len(), 1);
 
+        let item = result.module_item_arena.get(result.items[0]);
         if let ModuleItem::ModuleDeclaration {
             name, ports, items, ..
-        } = &result.items[0]
+        } = item
         {
             assert_eq!(name, "empty");
             assert_eq!(ports.len(), 0);
@@ -131,9 +132,10 @@ mod specific_tests {
 
         let result = parser.parse_content(&content).unwrap();
 
+        let item = result.module_item_arena.get(result.items[0]);
         if let ModuleItem::ModuleDeclaration {
             name, ports, items, ..
-        } = &result.items[0]
+        } = item
         {
             assert_eq!(name, "test");
             assert_eq!(ports.len(), 2);
@@ -161,24 +163,29 @@ mod specific_tests {
 
         let result = parser.parse_content(&content).unwrap();
 
-        let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        let item = result.module_item_arena.get(result.items[0]);
+        let ModuleItem::ModuleDeclaration { items, .. } = item else {
             panic!("Expected module declaration");
         };
-        let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        let item0 = result.module_item_arena.get(items[0]);
+        let ModuleItem::Assignment { expr, .. } = item0 else {
             panic!("Expected assignment");
         };
+        let expr_val = result.expr_arena.get(*expr);
         let Expression::Binary {
             op, left, right, ..
-        } = expr
+        } = expr_val
         else {
             panic!("Expected binary expression");
         };
         assert!(matches!(op, BinaryOp::Add));
-        let Expression::Identifier(left_id, _) = left.as_ref() else {
+        let left_expr = result.expr_arena.get(*left);
+        let Expression::Identifier(left_id, _) = left_expr else {
             panic!("Expected identifier on left");
         };
         assert_eq!(left_id, "a");
-        let Expression::Identifier(right_id, _) = right.as_ref() else {
+        let right_expr = result.expr_arena.get(*right);
+        let Expression::Identifier(right_id, _) = right_expr else {
             panic!("Expected identifier on right");
         };
         assert_eq!(right_id, "b");
@@ -196,13 +203,16 @@ mod specific_tests {
         .unwrap();
 
         let result = parser.parse_content(&content).unwrap();
-        let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        let item = result.module_item_arena.get(result.items[0]);
+        let ModuleItem::ModuleDeclaration { items, .. } = item else {
             panic!("Expected module declaration");
         };
-        let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        let item0 = result.module_item_arena.get(items[0]);
+        let ModuleItem::Assignment { expr, .. } = item0 else {
             panic!("Expected assignment");
         };
-        let Expression::Binary { op, .. } = expr else {
+        let expr_val = result.expr_arena.get(*expr);
+        let Expression::Binary { op, .. } = expr_val else {
             panic!("Expected binary expression");
         };
         assert!(matches!(op, BinaryOp::LogicalEquiv));
@@ -215,13 +225,16 @@ mod specific_tests {
         .unwrap();
 
         let result = parser.parse_content(&content).unwrap();
-        let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+        let item = result.module_item_arena.get(result.items[0]);
+        let ModuleItem::ModuleDeclaration { items, .. } = item else {
             panic!("Expected module declaration");
         };
-        let ModuleItem::Assignment { expr, .. } = &items[0] else {
+        let item0 = result.module_item_arena.get(items[0]);
+        let ModuleItem::Assignment { expr, .. } = item0 else {
             panic!("Expected assignment");
         };
-        let Expression::Binary { op, .. } = expr else {
+        let expr_val = result.expr_arena.get(*expr);
+        let Expression::Binary { op, .. } = expr_val else {
             panic!("Expected binary expression");
         };
         assert!(matches!(op, BinaryOp::LogicalImpl));

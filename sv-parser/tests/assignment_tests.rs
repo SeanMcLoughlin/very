@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use sv_parser::{Delay, ModuleItem, SystemVerilogParser};
+use sv_parser::{Delay, Expression, ModuleItem, SystemVerilogParser};
 
 /// Test parsing all assignment test files
 #[test]
@@ -43,17 +43,19 @@ fn test_cont_assignment_with_delay() {
     assert_eq!(result.items.len(), 1);
 
     // Check module structure
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { items, .. } = item {
         // Should have: wire w; and assign #10 w = a & b;
         assert_eq!(items.len(), 2, "Expected 2 items in module");
 
-        // Check the assignment (second item)
+        // Check the assignment (second item) - items are now refs, so dereference through arena
+        let item1 = result.module_item_arena.get(items[1]);
         if let ModuleItem::Assignment {
             delay,
             target,
             expr,
             ..
-        } = &items[1]
+        } = item1
         {
             // Verify delay is present and has value "10"
             assert!(delay.is_some(), "Assignment should have a delay");
@@ -63,16 +65,22 @@ fn test_cont_assignment_with_delay() {
                 panic!("Expected Delay::Value, got {:?}", delay);
             }
 
-            // Verify target
-            assert_eq!(target, "w", "Assignment target should be 'w'");
+            // Verify target - need to look up in arena
+            let target_expr = result.expr_arena.get(*target);
+            if let Expression::Identifier(name, _) = target_expr {
+                assert_eq!(name, "w", "Assignment target should be 'w'");
+            } else {
+                panic!("Expected Identifier expression for target");
+            }
 
-            // Expression is a & b - just verify it exists
+            // Expression is a & b - verify it's a binary operation
+            let expr_expr = result.expr_arena.get(*expr);
             assert!(
-                format!("{:?}", expr).contains("Binary"),
+                matches!(expr_expr, Expression::Binary { .. }),
                 "Expression should be binary operation"
             );
         } else {
-            panic!("Expected Assignment, got {:?}", items[1]);
+            panic!("Expected Assignment, got different item type");
         }
     } else {
         panic!("Expected ModuleDeclaration");
@@ -93,17 +101,19 @@ fn test_net_declaration_with_delay() {
     assert_eq!(result.items.len(), 1);
 
     // Check module structure
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { items, .. } = item {
         // Should have: wire #10 w; and assign w = a & b;
         assert_eq!(items.len(), 2, "Expected 2 items in module");
 
-        // Check the wire declaration (first item)
+        // Check the wire declaration (first item) - items are now refs, so dereference through arena
+        let item0 = result.module_item_arena.get(items[0]);
         if let ModuleItem::VariableDeclaration {
             data_type,
             delay,
             name,
             ..
-        } = &items[0]
+        } = item0
         {
             // Verify it's a wire
             assert_eq!(data_type, "wire", "Should be a wire declaration");
@@ -119,17 +129,18 @@ fn test_net_declaration_with_delay() {
             // Verify name
             assert_eq!(name, "w", "Wire name should be 'w'");
         } else {
-            panic!("Expected VariableDeclaration, got {:?}", items[0]);
+            panic!("Expected VariableDeclaration, got different item type");
         }
 
         // Check the assignment (second item) - should have no delay
-        if let ModuleItem::Assignment { delay, .. } = &items[1] {
+        let item1 = result.module_item_arena.get(items[1]);
+        if let ModuleItem::Assignment { delay, .. } = item1 {
             assert!(
                 delay.is_none(),
                 "Assignment should not have delay (delay is on the wire)"
             );
         } else {
-            panic!("Expected Assignment as second item, got {:?}", items[1]);
+            panic!("Expected Assignment as second item, got different item type");
         }
     } else {
         panic!("Expected ModuleDeclaration");

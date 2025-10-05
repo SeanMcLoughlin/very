@@ -17,7 +17,8 @@ fn test_steady_gclk_function() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
-    if let ModuleItem::ModuleDeclaration { name, items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { name, items, .. } = item {
         assert_eq!(name, "top");
 
         // Should have: variable declarations (a, clk), global clocking, and assert property
@@ -28,9 +29,10 @@ fn test_steady_gclk_function() {
         );
 
         // Find the global clocking item
-        let has_global_clocking = items
-            .iter()
-            .any(|item| matches!(item, ModuleItem::GlobalClocking { .. }));
+        let has_global_clocking = items.iter().any(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
+            matches!(item, ModuleItem::GlobalClocking { .. })
+        });
         assert!(has_global_clocking, "Expected global clocking declaration");
     } else {
         panic!("Expected module declaration");
@@ -48,13 +50,15 @@ fn test_changing_gclk_function() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
-    if let ModuleItem::ModuleDeclaration { name, items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { name, items, .. } = item {
         assert_eq!(name, "top");
 
         // Find the global clocking item
-        let has_global_clocking = items
-            .iter()
-            .any(|item| matches!(item, ModuleItem::GlobalClocking { .. }));
+        let has_global_clocking = items.iter().any(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
+            matches!(item, ModuleItem::GlobalClocking { .. })
+        });
         assert!(has_global_clocking, "Expected global clocking declaration");
     } else {
         panic!("Expected module declaration");
@@ -72,13 +76,15 @@ fn test_stable_gclk_function() {
     let result = parser.parse_content(&content).unwrap();
     assert_eq!(result.items.len(), 1);
 
-    if let ModuleItem::ModuleDeclaration { name, items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { name, items, .. } = item {
         assert_eq!(name, "top");
 
         // Find the global clocking item
-        let has_global_clocking = items
-            .iter()
-            .any(|item| matches!(item, ModuleItem::GlobalClocking { .. }));
+        let has_global_clocking = items.iter().any(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
+            matches!(item, ModuleItem::GlobalClocking { .. })
+        });
         assert!(has_global_clocking, "Expected global clocking declaration");
     } else {
         panic!("Expected module declaration");
@@ -95,9 +101,11 @@ fn test_global_clocking_with_identifier() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { items, .. } = item {
         // Find the global clocking item
-        let global_clocking = items.iter().find_map(|item| {
+        let global_clocking = items.iter().find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::GlobalClocking { identifier, .. } = item {
                 Some(identifier)
             } else {
@@ -125,9 +133,11 @@ fn test_global_clocking_with_end_label() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { items, .. } = item {
         // Find the global clocking item
-        let global_clocking = items.iter().find_map(|item| {
+        let global_clocking = items.iter().find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::GlobalClocking {
                 identifier,
                 end_label,
@@ -163,9 +173,11 @@ fn test_global_clocking_without_identifier() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    if let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] {
+    let item = result.module_item_arena.get(result.items[0]);
+    if let ModuleItem::ModuleDeclaration { items, .. } = item {
         // Find the global clocking item
-        let global_clocking = items.iter().find_map(|item| {
+        let global_clocking = items.iter().find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::GlobalClocking { identifier, .. } = item {
                 Some(identifier)
             } else {

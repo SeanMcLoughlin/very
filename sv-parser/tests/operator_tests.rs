@@ -42,24 +42,34 @@ fn test_logical_equivalence_operator() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
+
+    // Look up expression in arena
+    let expr_data = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_data
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalEquiv));
-    let Expression::Identifier(left_id, _) = left.as_ref() else {
+
+    // Look up operands in arena
+    let left_data = result.expr_arena.get(*left);
+    let Expression::Identifier(left_id, _) = left_data else {
         panic!("Expected identifier on left");
     };
     assert_eq!(left_id, "a");
-    let Expression::Identifier(right_id, _) = right.as_ref() else {
+
+    let right_data = result.expr_arena.get(*right);
+    let Expression::Identifier(right_id, _) = right_data else {
         panic!("Expected identifier on right");
     };
     assert_eq!(right_id, "b");
@@ -75,24 +85,29 @@ fn test_logical_implication_operator() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
+
+    // Look up expression in arena
+    let expr_data = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_data
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalImpl));
-    let Expression::Identifier(left_id, _) = left.as_ref() else {
+    let Expression::Identifier(left_id, _) = result.expr_arena.get(*left) else {
         panic!("Expected identifier on left");
     };
     assert_eq!(left_id, "a");
-    let Expression::Identifier(right_id, _) = right.as_ref() else {
+    let Expression::Identifier(right_id, _) = result.expr_arena.get(*right) else {
         panic!("Expected identifier on right");
     };
     assert_eq!(right_id, "b");
@@ -109,13 +124,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::Equal));
@@ -127,13 +145,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::NotEqual));
@@ -145,13 +166,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::CaseEqual));
@@ -163,13 +187,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::CaseNotEqual));
@@ -181,13 +208,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::WildcardEqual));
@@ -199,13 +229,16 @@ fn test_equality_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::WildcardNotEqual));
@@ -222,13 +255,16 @@ fn test_logical_and_or_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalAnd));
@@ -240,13 +276,16 @@ fn test_logical_and_or_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalOr));
@@ -266,49 +305,61 @@ fn test_comparison_operators() {
     assert_eq!(result.items.len(), 4);
 
     // Test greater than
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::GreaterThan));
 
     // Test less than
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[1] else {
+    let item = result.module_item_arena.get(result.items[1]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LessThan));
 
     // Test greater than or equal
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[2] else {
+    let item = result.module_item_arena.get(result.items[2]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::GreaterEqual));
 
     // Test less than or equal
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[3] else {
+    let item = result.module_item_arena.get(result.items[3]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LessEqual));
@@ -325,17 +376,20 @@ fn test_unary_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, operand, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, operand, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::Not));
-    let Expression::Identifier(id, _) = operand.as_ref() else {
+    let Expression::Identifier(id, _) = result.expr_arena.get(*operand) else {
         panic!("Expected identifier operand");
     };
     assert_eq!(id, "a");
@@ -347,13 +401,16 @@ fn test_unary_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::Plus));
@@ -365,13 +422,16 @@ fn test_unary_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::Minus));
@@ -388,13 +448,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionAnd));
@@ -406,13 +469,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionOr));
@@ -424,13 +490,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionXor));
@@ -442,13 +511,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionNand));
@@ -460,13 +532,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionNor));
@@ -478,13 +553,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::ReductionXnor));
@@ -496,13 +574,16 @@ fn test_reduction_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
-    let Expression::Unary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Unary { op, .. } = expr_data else {
         panic!("Expected unary expression");
     };
     assert!(matches!(op, UnaryOp::LogicalNot));
@@ -519,13 +600,15 @@ fn test_shift_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     // Find the initial block
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -544,12 +627,14 @@ fn test_shift_operators() {
         .expect("Expected initial block");
 
     // Get the first statement (the assignment)
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment, got {:?}", first_stmt);
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalShiftLeft));
@@ -561,12 +646,14 @@ fn test_shift_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -584,12 +671,14 @@ fn test_shift_operators() {
         })
         .expect("Expected initial block");
 
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::LogicalShiftRight));
@@ -601,12 +690,14 @@ fn test_shift_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -624,12 +715,14 @@ fn test_shift_operators() {
         })
         .expect("Expected initial block");
 
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::ArithmeticShiftLeft));
@@ -641,12 +734,14 @@ fn test_shift_operators() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -664,12 +759,14 @@ fn test_shift_operators() {
         })
         .expect("Expected initial block");
 
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::ArithmeticShiftRight));
@@ -684,12 +781,14 @@ fn test_modulo_operator() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -707,12 +806,14 @@ fn test_modulo_operator() {
         })
         .expect("Expected initial block");
 
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::Modulo));
@@ -727,12 +828,14 @@ fn test_bitwise_xnor_operator() {
     .unwrap();
 
     let result = parser.parse_content(&content).unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
     let initial_block = items
         .iter()
-        .find_map(|item| {
+        .find_map(|&item_ref| {
+            let item = result.module_item_arena.get(item_ref);
             if let ModuleItem::ProceduralBlock {
                 block_type,
                 statements,
@@ -750,12 +853,14 @@ fn test_bitwise_xnor_operator() {
         })
         .expect("Expected initial block");
 
-    let first_stmt = &initial_block[0];
+    let first_stmt_ref = initial_block[0];
+    let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
 
-    let Expression::Binary { op, .. } = expr else {
+    let expr_data = result.expr_arena.get(*expr);
+    let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::BitwiseXnor));

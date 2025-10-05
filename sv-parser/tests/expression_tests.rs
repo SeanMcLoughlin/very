@@ -40,24 +40,29 @@ fn test_binary_add_expression() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
+    let expr_val = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_val
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::Add));
-    let Expression::Identifier(left_id, _) = left.as_ref() else {
+    let left_expr = result.expr_arena.get(*left);
+    let Expression::Identifier(left_id, _) = left_expr else {
         panic!("Expected identifier on left");
     };
     assert_eq!(left_id, "a");
-    let Expression::Identifier(right_id, _) = right.as_ref() else {
+    let right_expr = result.expr_arena.get(*right);
+    let Expression::Identifier(right_id, _) = right_expr else {
         panic!("Expected identifier on right");
     };
     assert_eq!(right_id, "b");
@@ -73,24 +78,29 @@ fn test_number_expressions() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
+    let expr_val = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_val
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::Mul));
-    let Expression::Number(left_num, _) = left.as_ref() else {
+    let left_expr = result.expr_arena.get(*left);
+    let Expression::Number(left_num, _) = left_expr else {
         panic!("Expected number on left");
     };
     assert_eq!(left_num, "42");
-    let Expression::Number(right_num, _) = right.as_ref() else {
+    let right_expr = result.expr_arena.get(*right);
+    let Expression::Number(right_num, _) = right_expr else {
         panic!("Expected number on right");
     };
     assert_eq!(right_num, "3");
@@ -106,25 +116,30 @@ fn test_parentheses_precedence() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
     // Should parse as: (a + b) * c
+    let expr_val = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_val
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::Mul));
-    let Expression::Binary { op: left_op, .. } = left.as_ref() else {
+    let left_expr = result.expr_arena.get(*left);
+    let Expression::Binary { op: left_op, .. } = left_expr else {
         panic!("Expected binary expression on left");
     };
     assert!(matches!(left_op, BinaryOp::Add));
-    let Expression::Identifier(right_id, _) = right.as_ref() else {
+    let right_expr = result.expr_arena.get(*right);
+    let Expression::Identifier(right_id, _) = right_expr else {
         panic!("Expected identifier on right");
     };
     assert_eq!(right_id, "c");
@@ -141,24 +156,29 @@ fn test_systemverilog_numbers() {
 
     let result = parser.parse_content(&content).unwrap();
 
-    let ModuleItem::ModuleDeclaration { items, .. } = &result.items[0] else {
+    let item = result.module_item_arena.get(result.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected module declaration");
     };
-    let ModuleItem::Assignment { expr, .. } = &items[0] else {
+    let item0 = result.module_item_arena.get(items[0]);
+    let ModuleItem::Assignment { expr, .. } = item0 else {
         panic!("Expected assignment");
     };
+    let expr_val = result.expr_arena.get(*expr);
     let Expression::Binary {
         op, left, right, ..
-    } = expr
+    } = expr_val
     else {
         panic!("Expected binary expression");
     };
     assert!(matches!(op, BinaryOp::NotEqual));
-    let Expression::Identifier(left_id, _) = left.as_ref() else {
+    let left_expr = result.expr_arena.get(*left);
+    let Expression::Identifier(left_id, _) = left_expr else {
         panic!("Expected identifier on left");
     };
     assert_eq!(left_id, "a");
-    let Expression::Number(right_num, _) = right.as_ref() else {
+    let right_expr = result.expr_arena.get(*right);
+    let Expression::Number(right_num, _) = right_expr else {
         panic!("Expected number on right");
     };
     assert_eq!(right_num, "8'b1101z001");

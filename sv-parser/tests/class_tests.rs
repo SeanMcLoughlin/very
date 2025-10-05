@@ -15,7 +15,8 @@ fn test_simple_class() {
     let ast = result.unwrap();
     assert_eq!(ast.items.len(), 1);
 
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ClassDeclaration { name, items, .. } => {
             assert_eq!(name, "test_cls");
             assert_eq!(items.len(), 1);
@@ -49,7 +50,8 @@ fn test_class_with_local_property() {
     );
 
     let ast = result.unwrap();
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ClassDeclaration { items, .. } => match &items[0] {
             ClassItem::Property {
                 qualifier,
@@ -82,7 +84,8 @@ fn test_class_with_protected_property() {
     );
 
     let ast = result.unwrap();
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ClassDeclaration { items, .. } => match &items[0] {
             ClassItem::Property {
                 qualifier,
@@ -115,7 +118,8 @@ fn test_class_with_extends() {
     );
 
     let ast = result.unwrap();
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ClassDeclaration { name, extends, .. } => {
             assert_eq!(name, "child");
             assert_eq!(extends, &Some("parent".to_string()));
@@ -139,13 +143,15 @@ fn test_class_in_module() {
     );
 
     let ast = result.unwrap();
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ModuleDeclaration { name, items, .. } => {
             assert_eq!(name, "top");
             assert_eq!(items.len(), 3); // class + variable declaration + initial block
 
             // Check class declaration
-            match &items[0] {
+            let item0 = ast.module_item_arena.get(items[0]);
+            match item0 {
                 ModuleItem::ClassDeclaration {
                     name,
                     items: class_items,
@@ -191,7 +197,8 @@ fn test_class_in_module() {
             }
 
             // Check variable declaration with class type
-            match &items[1] {
+            let item1 = ast.module_item_arena.get(items[1]);
+            match item1 {
                 ModuleItem::VariableDeclaration {
                     data_type, name, ..
                 } => {
@@ -220,7 +227,8 @@ fn test_class_with_member_access() {
     );
 
     let ast = result.unwrap();
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ClassDeclaration { name, items, .. } => {
             assert_eq!(name, "test_cls");
             assert_eq!(items.len(), 2);
@@ -259,14 +267,16 @@ fn test_encapsulation_prot_from_inside() {
 
     let ast = result.unwrap();
     // Verify module structure
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ModuleDeclaration { name, items, .. } => {
             assert_eq!(name, "top");
             // Should have: 2 class declarations + 1 variable declaration + 1 initial block
             assert!(items.len() >= 4, "Expected at least 4 items in module");
 
             // Verify base class (a_cls)
-            match &items[0] {
+            let item0 = ast.module_item_arena.get(items[0]);
+            match item0 {
                 ModuleItem::ClassDeclaration {
                     name,
                     items: class_items,
@@ -292,7 +302,8 @@ fn test_encapsulation_prot_from_inside() {
             }
 
             // Verify derived class (b_cls)
-            match &items[1] {
+            let item1 = ast.module_item_arena.get(items[1]);
+            match item1 {
                 ModuleItem::ClassDeclaration {
                     name,
                     extends,
@@ -316,9 +327,10 @@ fn test_encapsulation_prot_from_inside() {
             }
 
             // Verify initial block with method call
-            let has_initial_block = items
-                .iter()
-                .any(|item| matches!(item, ModuleItem::ProceduralBlock { .. }));
+            let has_initial_block = items.iter().any(|&item_ref| {
+                let item = ast.module_item_arena.get(item_ref);
+                matches!(item, ModuleItem::ProceduralBlock { .. })
+            });
             assert!(
                 has_initial_block,
                 "Expected initial block with method calls"
@@ -344,12 +356,14 @@ fn test_encapsulation_local_from_inside() {
 
     let ast = result.unwrap();
     // Verify module and class structure
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ModuleDeclaration { name, items, .. } => {
             assert_eq!(name, "top");
 
             // Verify derived class has local property and function
-            match &items[1] {
+            let item1 = ast.module_item_arena.get(items[1]);
+            match item1 {
                 ModuleItem::ClassDeclaration {
                     name,
                     items: class_items,
@@ -393,12 +407,14 @@ fn test_encapsulation_inherited_prot_from_inside() {
 
     let ast = result.unwrap();
     // Verify both classes exist with proper inheritance
-    match &ast.items[0] {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    match item {
         ModuleItem::ModuleDeclaration { name, items, .. } => {
             assert_eq!(name, "top");
 
             // Verify base class has protected property
-            match &items[0] {
+            let item0 = ast.module_item_arena.get(items[0]);
+            match item0 {
                 ModuleItem::ClassDeclaration {
                     name,
                     items: class_items,
@@ -425,7 +441,8 @@ fn test_encapsulation_inherited_prot_from_inside() {
             }
 
             // Verify derived class extends base class
-            match &items[1] {
+            let item1 = ast.module_item_arena.get(items[1]);
+            match item1 {
                 ModuleItem::ClassDeclaration { name, extends, .. } => {
                     assert_eq!(name, "b_cls");
                     assert_eq!(

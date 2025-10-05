@@ -21,14 +21,15 @@ module test; endmodule
     );
 
     // Check the define directive
+    let item = ast.module_item_arena.get(ast.items[0]);
     let ModuleItem::DefineDirective {
         name,
         value,
         parameters,
         ..
-    } = &ast.items[0]
+    } = item
     else {
-        panic!("Expected DefineDirective, got {:?}", ast.items[0]);
+        panic!("Expected DefineDirective, got {:?}", item);
     };
 
     assert_eq!(name, "WORDSIZE");
@@ -49,12 +50,13 @@ module test; endmodule
     assert!(result.is_ok(), "Parse should succeed");
 
     let ast = result.unwrap();
+    let item = ast.module_item_arena.get(ast.items[0]);
     let ModuleItem::DefineDirective {
         name,
         value,
         parameters,
         ..
-    } = &ast.items[0]
+    } = item
     else {
         panic!("Expected DefineDirective");
     };
@@ -79,7 +81,8 @@ module test; endmodule
     assert!(result.is_ok(), "Parse should succeed");
 
     let ast = result.unwrap();
-    let ModuleItem::IncludeDirective { path, .. } = &ast.items[0] else {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    let ModuleItem::IncludeDirective { path, .. } = item else {
         panic!("Expected IncludeDirective");
     };
 
@@ -99,7 +102,8 @@ module test; endmodule
     assert!(result.is_ok(), "Parse should succeed");
 
     let ast = result.unwrap();
-    let ModuleItem::IncludeDirective { path, .. } = &ast.items[0] else {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    let ModuleItem::IncludeDirective { path, .. } = item else {
         panic!("Expected IncludeDirective");
     };
 
@@ -128,19 +132,22 @@ module test; endmodule
     );
 
     // First define
-    let ModuleItem::DefineDirective { name, .. } = &ast.items[0] else {
+    let item0 = ast.module_item_arena.get(ast.items[0]);
+    let ModuleItem::DefineDirective { name, .. } = item0 else {
         panic!("Expected DefineDirective");
     };
     assert_eq!(name, "WIDTH");
 
     // Second define
-    let ModuleItem::DefineDirective { name, .. } = &ast.items[1] else {
+    let item1 = ast.module_item_arena.get(ast.items[1]);
+    let ModuleItem::DefineDirective { name, .. } = item1 else {
         panic!("Expected DefineDirective");
     };
     assert_eq!(name, "HEIGHT");
 
     // Include
-    let ModuleItem::IncludeDirective { path, .. } = &ast.items[2] else {
+    let item2 = ast.module_item_arena.get(ast.items[2]);
+    let ModuleItem::IncludeDirective { path, .. } = item2 else {
         panic!("Expected IncludeDirective");
     };
     assert_eq!(path, "common.sv");
@@ -161,7 +168,8 @@ endmodule
     assert!(result.is_ok(), "Parse should succeed");
 
     let ast = result.unwrap();
-    let ModuleItem::ModuleDeclaration { items, .. } = &ast.items[0] else {
+    let item = ast.module_item_arena.get(ast.items[0]);
+    let ModuleItem::ModuleDeclaration { items, .. } = item else {
         panic!("Expected ModuleDeclaration");
     };
 
@@ -171,12 +179,14 @@ endmodule
         "Should have define and include inside module"
     );
 
-    let ModuleItem::DefineDirective { name, .. } = &items[0] else {
+    let item0 = ast.module_item_arena.get(items[0]);
+    let ModuleItem::DefineDirective { name, .. } = item0 else {
         panic!("Expected DefineDirective inside module");
     };
     assert_eq!(name, "LOCAL_VAR");
 
-    let ModuleItem::IncludeDirective { path, .. } = &items[1] else {
+    let item1 = ast.module_item_arena.get(items[1]);
+    let ModuleItem::IncludeDirective { path, .. } = item1 else {
         panic!("Expected IncludeDirective inside module");
     };
     assert_eq!(path, "module_helper.sv");
@@ -207,26 +217,24 @@ module test; endmodule
     let mut parser = SystemVerilogParser::new(vec![], HashMap::new());
     let result = parser.parse_file(&main_file);
 
+    if let Err(ref e) = result {
+        eprintln!("Parse error: {:?}", e);
+    }
     assert!(result.is_ok(), "Parse should succeed");
     let ast = result.unwrap();
 
-    // Check that include path was resolved
-    let ModuleItem::IncludeDirective {
-        path,
-        resolved_path,
-        ..
-    } = &ast.items[0]
-    else {
-        panic!("Expected IncludeDirective");
-    };
+    // Includes are now expanded - the IncludeDirective is replaced with the file contents
+    // The included file has a comment, so we should have at least the module
+    let module_count = ast
+        .items
+        .iter()
+        .filter(|&item_ref| {
+            let item = ast.module_item_arena.get(*item_ref);
+            matches!(item, ModuleItem::ModuleDeclaration { .. })
+        })
+        .count();
 
-    assert_eq!(path, "included.sv");
-    assert!(resolved_path.is_some(), "Include path should be resolved");
-    assert_eq!(
-        resolved_path.as_ref().unwrap().canonicalize().unwrap(),
-        include_file.canonicalize().unwrap(),
-        "Resolved path should match include file"
-    );
+    assert_eq!(module_count, 1, "Should have the test module");
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
@@ -263,17 +271,25 @@ module test; endmodule
     assert!(result.is_ok(), "Parse should succeed");
     let ast = result.unwrap();
 
-    // Check that include was found in include directory
-    let ModuleItem::IncludeDirective { resolved_path, .. } = &ast.items[0] else {
-        panic!("Expected IncludeDirective");
-    };
+    // Includes are now expanded - the IncludeDirective is replaced with the file contents
+    // The included file has a comment, so we should have at least the module
+    let module_count = ast
+        .items
+        .iter()
+        .filter(|&item_ref| {
+            let item = ast.module_item_arena.get(*item_ref);
+            matches!(item, ModuleItem::ModuleDeclaration { .. })
+        })
+        .count();
 
-    assert!(resolved_path.is_some(), "Include should be resolved");
-    assert_eq!(
+    assert_eq!(module_count, 1, "Should have the test module");
+
+    // No need to check resolved_path since includes are expanded
+    /*assert_eq!(
         resolved_path.as_ref().unwrap().canonicalize().unwrap(),
         include_file.canonicalize().unwrap(),
         "Should find include in specified include directory"
-    );
+    );*/
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
@@ -324,7 +340,7 @@ endmodule
 
     // Parse with includes expanded
     let mut parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let result = parser.parse_file_with_includes(&main_file);
+    let result = parser.parse_file(&main_file);
 
     assert!(result.is_ok(), "Recursive parse should succeed");
     let ast = result.unwrap();
@@ -334,12 +350,18 @@ endmodule
     let define_count = ast
         .items
         .iter()
-        .filter(|item| matches!(item, ModuleItem::DefineDirective { .. }))
+        .filter(|&item_ref| {
+            let item = ast.module_item_arena.get(*item_ref);
+            matches!(item, ModuleItem::DefineDirective { .. })
+        })
         .count();
     let module_count = ast
         .items
         .iter()
-        .filter(|item| matches!(item, ModuleItem::ModuleDeclaration { .. }))
+        .filter(|&item_ref| {
+            let item = ast.module_item_arena.get(*item_ref);
+            matches!(item, ModuleItem::ModuleDeclaration { .. })
+        })
         .count();
 
     assert_eq!(define_count, 2, "Should have 2 defines (DEPTH, WIDTH)");
@@ -385,7 +407,7 @@ endmodule
 
     // Parse with includes - should handle circular includes gracefully
     let mut parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let result = parser.parse_file_with_includes(&a_file);
+    let result = parser.parse_file(&a_file);
 
     // Should succeed (circular includes are detected and skipped)
     assert!(result.is_ok(), "Should handle circular includes gracefully");
@@ -395,7 +417,10 @@ endmodule
     let module_count = ast
         .items
         .iter()
-        .filter(|item| matches!(item, ModuleItem::ModuleDeclaration { .. }))
+        .filter(|&item_ref| {
+            let item = ast.module_item_arena.get(*item_ref);
+            matches!(item, ModuleItem::ModuleDeclaration { .. })
+        })
         .count();
 
     assert_eq!(
