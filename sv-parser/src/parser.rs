@@ -315,8 +315,10 @@ impl ParsedClassItem {
 enum ParsedModuleItem {
     ModuleDeclaration {
         name: String,
+        name_span: Span,
         ports: Vec<Port>,
         items: Vec<ParsedModuleItem>,
+        span: Span,
     },
     VariableDeclaration {
         data_type: String,
@@ -325,43 +327,58 @@ enum ParsedModuleItem {
         delay: Option<Delay>,
         range: Option<Range>,
         name: String,
+        name_span: Span,
         unpacked_dimensions: Vec<UnpackedDimension>,
         initial_value: Option<ParsedExpression>,
+        span: Span,
     },
     Assignment {
         delay: Option<Delay>,
         target: ParsedExpression,
         expr: ParsedExpression,
+        span: Span,
     },
     ProceduralBlock {
         block_type: ProceduralBlockType,
         statements: Vec<ParsedStatement>,
+        span: Span,
     },
     ClassDeclaration {
         name: String,
+        name_span: Span,
         extends: Option<String>,
         items: Vec<ParsedClassItem>,
+        span: Span,
     },
     PortDeclaration {
         direction: PortDirection,
         port_type: String,
         name: String,
+        name_span: Span,
+        span: Span,
     },
     DefineDirective {
         name: String,
+        name_span: Span,
         parameters: Vec<String>,
         value: String,
+        span: Span,
     },
     IncludeDirective {
         path: String,
+        path_span: Span,
+        span: Span,
     },
     ConcurrentAssertion {
         statement: ParsedStatement,
+        span: Span,
     },
     GlobalClocking {
         identifier: Option<String>,
+        identifier_span: Option<Span>,
         clocking_event: ParsedExpression,
         end_label: Option<String>,
+        span: Span,
     },
 }
 
@@ -374,7 +391,13 @@ impl ParsedModuleItem {
         module_item_arena: &mut ModuleItemArena,
     ) -> ModuleItem {
         match self {
-            ParsedModuleItem::ModuleDeclaration { name, ports, items } => {
+            ParsedModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                ports,
+                items,
+                span,
+            } => {
                 // First flatten all child items into ModuleItems
                 let flattened_items: Vec<ModuleItem> = items
                     .into_iter()
@@ -389,10 +412,10 @@ impl ParsedModuleItem {
 
                 ModuleItem::ModuleDeclaration {
                     name,
-                    name_span: (0, 0),
+                    name_span,
                     ports,
                     items: item_refs,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedModuleItem::VariableDeclaration {
@@ -402,8 +425,10 @@ impl ParsedModuleItem {
                 delay,
                 range,
                 name,
+                name_span,
                 unpacked_dimensions,
                 initial_value,
+                span,
             } => ModuleItem::VariableDeclaration {
                 data_type,
                 signing,
@@ -411,15 +436,16 @@ impl ParsedModuleItem {
                 delay,
                 range,
                 name,
-                name_span: (0, 0),
+                name_span,
                 unpacked_dimensions,
                 initial_value: initial_value.map(|e| e.flatten(expr_arena)),
-                span: (0, 0),
+                span,
             },
             ParsedModuleItem::Assignment {
                 delay,
                 target,
                 expr,
+                span,
             } => {
                 let target_ref = target.flatten(expr_arena);
                 let expr_ref = expr.flatten(expr_arena);
@@ -427,12 +453,13 @@ impl ParsedModuleItem {
                     delay,
                     target: target_ref,
                     expr: expr_ref,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedModuleItem::ProceduralBlock {
                 block_type,
                 statements,
+                span,
             } => {
                 let statement_refs: Vec<StmtRef> = statements
                     .into_iter()
@@ -444,13 +471,15 @@ impl ParsedModuleItem {
                 ModuleItem::ProceduralBlock {
                     block_type,
                     statements: statement_refs,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedModuleItem::ClassDeclaration {
                 name,
+                name_span,
                 extends,
                 items,
+                span,
             } => {
                 let flattened_items: Vec<ClassItem> = items
                     .into_iter()
@@ -458,60 +487,70 @@ impl ParsedModuleItem {
                     .collect();
                 ModuleItem::ClassDeclaration {
                     name,
-                    name_span: (0, 0),
+                    name_span,
                     extends,
                     items: flattened_items,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedModuleItem::PortDeclaration {
                 direction,
                 port_type,
                 name,
+                name_span,
+                span,
             } => ModuleItem::PortDeclaration {
                 direction,
                 port_type,
                 name,
-                name_span: (0, 0),
-                span: (0, 0),
+                name_span,
+                span,
             },
             ParsedModuleItem::DefineDirective {
                 name,
+                name_span,
                 parameters,
                 value,
+                span,
             } => ModuleItem::DefineDirective {
                 name,
-                name_span: (0, 0),
+                name_span,
                 parameters,
                 value,
-                span: (0, 0),
+                span,
             },
-            ParsedModuleItem::IncludeDirective { path } => ModuleItem::IncludeDirective {
+            ParsedModuleItem::IncludeDirective {
                 path,
-                path_span: (0, 0),
+                path_span,
+                span,
+            } => ModuleItem::IncludeDirective {
+                path,
+                path_span,
                 resolved_path: None,
-                span: (0, 0),
+                span,
             },
-            ParsedModuleItem::ConcurrentAssertion { statement } => {
+            ParsedModuleItem::ConcurrentAssertion { statement, span } => {
                 let stmt = statement.flatten(expr_arena, stmt_arena);
                 let stmt_ref = stmt_arena.alloc(stmt);
                 ModuleItem::ConcurrentAssertion {
                     statement: stmt_ref,
-                    span: (0, 0),
+                    span,
                 }
             }
             ParsedModuleItem::GlobalClocking {
                 identifier,
+                identifier_span,
                 clocking_event,
                 end_label,
+                span,
             } => {
                 let event_ref = clocking_event.flatten(expr_arena);
                 ModuleItem::GlobalClocking {
                     identifier,
-                    identifier_span: None,
+                    identifier_span,
                     clocking_event: event_ref,
                     end_label,
-                    span: (0, 0),
+                    span,
                 }
             }
         }
@@ -958,7 +997,7 @@ impl SystemVerilogParser {
     fn build_parser(&self) -> impl Parser<char, Vec<ParsedModuleItem>, Error = Simple<char>> + '_ {
         // Comments
         let line_comment = just("//")
-            .then(take_until(text::newline().or(end())))
+            .then(take_until(text::newline::<char, Simple<char>>().or(end())))
             .ignored();
         let block_comment = just("/*").then(take_until(just("*/"))).ignored();
 
@@ -1272,10 +1311,11 @@ impl SystemVerilogParser {
                     .repeated()
                     .then_ignore(just(';').padded_by(ws.clone())),
             )
-            .map(|_| ParsedModuleItem::ConcurrentAssertion {
+            .map_with_span(|_, span| ParsedModuleItem::ConcurrentAssertion {
                 statement: ParsedStatement::ExpressionStatement {
                     expr: ParsedExpression::Identifier("placeholder".to_string(), (0, 0)),
                 },
+                span: (span.start, span.end),
             });
 
         // Type keywords - order matters! Longer keywords first
@@ -1315,7 +1355,11 @@ impl SystemVerilogParser {
             .ignore_then(just('`'))
             .ignore_then(text::keyword("define"))
             .ignore_then(ws.clone())
-            .ignore_then(identifier.clone())
+            .ignore_then(
+                identifier
+                    .clone()
+                    .map_with_span(|n, s| (n, (s.start, s.end))),
+            )
             .then_ignore(ws.clone())
             .then(
                 just('(')
@@ -1329,13 +1373,15 @@ impl SystemVerilogParser {
                     .or_not(),
             )
             .then(filter(|c: &char| *c != '\n').repeated().collect::<String>())
-            .map(
-                |((name, params), value)| ParsedModuleItem::DefineDirective {
+            .map_with_span(|(((name, name_span), params), value), span| {
+                ParsedModuleItem::DefineDirective {
                     name,
+                    name_span,
                     parameters: params.unwrap_or_default(),
                     value: value.trim().to_string(),
-                },
-            );
+                    span: (span.start, span.end),
+                }
+            });
 
         let include_directive = ws
             .clone()
@@ -1355,7 +1401,11 @@ impl SystemVerilogParser {
                         .delimited_by(just('<'), just('>')),
                 )),
             )
-            .map(|path| ParsedModuleItem::IncludeDirective { path });
+            .map_with_span(|path, span| ParsedModuleItem::IncludeDirective {
+                path,
+                path_span: (span.start, span.end),
+                span: (span.start, span.end),
+            });
 
         // Port declaration
         let port_decl = ws
@@ -1364,16 +1414,22 @@ impl SystemVerilogParser {
             .then_ignore(ws.clone())
             .then(type_keyword.clone()) // port type (wire, reg, logic, etc.)
             .then_ignore(ws.clone())
-            .then(identifier.clone()) // port name
+            .then(
+                identifier
+                    .clone()
+                    .map_with_span(|n, s| (n, (s.start, s.end))),
+            ) // port name
             .then_ignore(ws.clone())
             .then_ignore(just(';'))
-            .map(
-                |((direction, port_type), name)| ParsedModuleItem::PortDeclaration {
+            .map_with_span(|((direction, port_type), (name, name_span)), span| {
+                ParsedModuleItem::PortDeclaration {
                     direction,
                     port_type,
                     name,
-                },
-            );
+                    name_span,
+                    span: (span.start, span.end),
+                }
+            });
 
         // Port: input [3:0] a, output b, output reg data, or just "clk" (non-ANSI)
         let port = port_direction
@@ -1649,7 +1705,11 @@ impl SystemVerilogParser {
             .clone()
             .ignore_then(text::keyword("class"))
             .then_ignore(ws.clone())
-            .ignore_then(identifier.clone())
+            .ignore_then(
+                identifier
+                    .clone()
+                    .map_with_span(|n, s| (n, (s.start, s.end))),
+            )
             .then_ignore(ws.clone())
             .then(
                 text::keyword("extends")
@@ -1664,13 +1724,15 @@ impl SystemVerilogParser {
             .then_ignore(ws.clone())
             .then_ignore(text::keyword("endclass"))
             .then_ignore(ws.clone())
-            .map(
-                |((name, extends), items)| ParsedModuleItem::ClassDeclaration {
+            .map_with_span(|(((name, name_span), extends), items), span| {
+                ParsedModuleItem::ClassDeclaration {
                     name,
+                    name_span,
                     extends,
                     items,
-                },
-            );
+                    span: (span.start, span.end),
+                }
+            });
 
         // Module item parser (recursive for module body)
         let module_item = recursive(|_module_item| {
@@ -1759,6 +1821,7 @@ impl SystemVerilogParser {
                 .then(
                     identifier
                         .clone()
+                        .map_with_span(|n, s| (n, (s.start, s.end)))
                         .then_ignore(ws.clone())
                         .then(unpacked_dim.clone().repeated()) // Unpacked dimensions [10][20]
                         .then_ignore(ws.clone())
@@ -1773,14 +1836,15 @@ impl SystemVerilogParser {
                 )
                 .then_ignore(ws.clone())
                 .then_ignore(just(';'))
-                .map(
+                .map_with_span(
                     |(
                         ((((data_type, signing), drive_strength), packed_range), delay),
                         variables,
-                    )| {
+                    ),
+                     span| {
                         // For now, return only the first variable as VariableDeclaration
                         // In a real implementation, we'd need to handle multiple declarations
-                        let ((name, unpacked), initial_value) = &variables[0];
+                        let (((name, name_span), unpacked), initial_value) = &variables[0];
                         ParsedModuleItem::VariableDeclaration {
                             data_type: data_type.to_string(),
                             signing: signing.map(|s| s.to_string()),
@@ -1788,8 +1852,10 @@ impl SystemVerilogParser {
                             delay,
                             range: packed_range,
                             name: name.clone(),
+                            name_span: *name_span,
                             unpacked_dimensions: unpacked.clone(),
                             initial_value: initial_value.clone(),
+                            span: (span.start, span.end),
                         }
                     },
                 );
@@ -1808,11 +1874,14 @@ impl SystemVerilogParser {
                 .then(expr.clone())
                 .then_ignore(ws.clone())
                 .then_ignore(just(';'))
-                .map(|((delay, target), expr)| ParsedModuleItem::Assignment {
-                    delay,
-                    target,
-                    expr,
-                });
+                .map_with_span(
+                    |((delay, target), expr), span| ParsedModuleItem::Assignment {
+                        delay,
+                        target,
+                        expr,
+                        span: (span.start, span.end),
+                    },
+                );
 
             // Procedural block type
             let block_type = choice((
@@ -1850,19 +1919,25 @@ impl SystemVerilogParser {
                     // Single statement without begin/end
                     statement.clone().map(|s| vec![s]),
                 )))
-                .map(
-                    |(block_type, statements)| ParsedModuleItem::ProceduralBlock {
+                .map_with_span(|(block_type, statements), span| {
+                    ParsedModuleItem::ProceduralBlock {
                         block_type,
                         statements,
-                    },
-                );
+                        span: (span.start, span.end),
+                    }
+                });
 
             // Global clocking (needs to be before var_decl to avoid conflicts)
             let global_clocking_item = text::keyword("global")
                 .padded_by(ws.clone())
                 .ignore_then(text::keyword("clocking"))
                 .then_ignore(ws.clone())
-                .ignore_then(identifier.clone().or_not())
+                .ignore_then(
+                    identifier
+                        .clone()
+                        .map_with_span(|n, s| (n, (s.start, s.end)))
+                        .or_not(),
+                )
                 .then_ignore(ws.clone())
                 .then(
                     // Event control @(...)
@@ -1886,11 +1961,13 @@ impl SystemVerilogParser {
                         .ignore_then(identifier.clone())
                         .or_not(),
                 )
-                .map(|((identifier, clocking_event), end_label)| {
+                .map_with_span(|((identifier, clocking_event), end_label), span| {
                     ParsedModuleItem::GlobalClocking {
-                        identifier,
+                        identifier: identifier.as_ref().map(|(n, _)| n.clone()),
+                        identifier_span: identifier.map(|(_, s)| s),
                         clocking_event,
                         end_label,
+                        span: (span.start, span.end),
                     }
                 });
 
@@ -1912,7 +1989,12 @@ impl SystemVerilogParser {
             .padded_by(ws.clone())
             .ignore_then(text::keyword("clocking"))
             .then_ignore(ws.clone())
-            .ignore_then(identifier.clone().or_not())
+            .ignore_then(
+                identifier
+                    .clone()
+                    .map_with_span(|n, s| (n, (s.start, s.end)))
+                    .or_not(),
+            )
             .then_ignore(ws.clone())
             .then(
                 // Event control @(...)
@@ -1936,20 +2018,26 @@ impl SystemVerilogParser {
                     .ignore_then(identifier.clone())
                     .or_not(),
             )
-            .map(
-                |((identifier, clocking_event), end_label)| ParsedModuleItem::GlobalClocking {
-                    identifier,
+            .map_with_span(|((identifier, clocking_event), end_label), span| {
+                ParsedModuleItem::GlobalClocking {
+                    identifier: identifier.as_ref().map(|(n, _)| n.clone()),
+                    identifier_span: identifier.map(|(_, s)| s),
                     clocking_event,
                     end_label,
-                },
-            );
+                    span: (span.start, span.end),
+                }
+            });
 
         // Module declaration: module <name> (ports); items endmodule
         let module_decl = ws
             .clone()
             .ignore_then(text::keyword("module"))
             .then_ignore(ws.clone())
-            .ignore_then(identifier.clone())
+            .ignore_then(
+                identifier
+                    .clone()
+                    .map_with_span(|n, s| (n, (s.start, s.end))),
+            )
             .then_ignore(ws.clone())
             .then(port_list.or_not())
             .then_ignore(ws.clone())
@@ -1959,13 +2047,15 @@ impl SystemVerilogParser {
             .then_ignore(ws.clone())
             .then_ignore(text::keyword("endmodule"))
             .then_ignore(ws.clone())
-            .map(
-                |((name, ports), items)| ParsedModuleItem::ModuleDeclaration {
+            .map_with_span(|(((name, name_span), ports), items), span| {
+                ParsedModuleItem::ModuleDeclaration {
                     name,
+                    name_span,
                     ports: ports.unwrap_or_default(),
                     items,
-                },
-            );
+                    span: (span.start, span.end),
+                }
+            });
 
         // Top-level items (modules, classes, preprocessor directives)
         let top_level = choice((
