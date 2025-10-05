@@ -1,112 +1,34 @@
-use std::collections::HashMap;
-use std::path::Path;
-use sv_parser::SystemVerilogParser;
+#[path = "common/mod.rs"]
+pub mod common;
+
+use common::{
+    assert_directory_fails, assert_directory_parses, assert_parse_ok, ast::first_assignment_expr,
+};
+use sv_parser::{BinaryOp, Expression, ModuleItem, PortDirection};
 
 /// Test that runs the parser against all SystemVerilog test files
 #[test]
 fn test_parse_all_valid_files() {
-    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files");
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test modules
-    test_directory(&parser, &test_files_dir.join("modules"), true);
-
-    // Test expressions
-    test_directory(&parser, &test_files_dir.join("expressions"), true);
-
-    // Test operators
-    test_directory(&parser, &test_files_dir.join("operators"), true);
-
-    // Test preprocessor (may have missing includes, so allow some failures)
-    test_directory(&parser, &test_files_dir.join("preprocessor"), false);
+    assert_directory_parses("modules");
+    assert_directory_parses("expressions");
+    assert_directory_parses("operators");
+    assert_directory_parses("assignments");
 }
 
 /// Test that error files properly fail to parse
 #[test]
 fn test_parse_error_files() {
-    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files");
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test error files - these should fail to parse
-    test_directory_should_fail(&parser, &test_files_dir.join("errors"));
-}
-
-fn test_directory(parser: &SystemVerilogParser, dir: &Path, expect_all_success: bool) {
-    if !dir.exists() {
-        return;
-    }
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
-            let filename = path.file_name().unwrap().to_str().unwrap();
-
-            match std::fs::read_to_string(&path) {
-                Ok(content) => match parser.parse_content(&content) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        if expect_all_success {
-                            panic!(
-                                "Expected {} to parse successfully, but got error: {}",
-                                filename, e
-                            );
-                        }
-                    }
-                },
-                Err(e) => {
-                    if expect_all_success {
-                        panic!("Failed to read test file {}: {}", filename, e);
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn test_directory_should_fail(parser: &SystemVerilogParser, dir: &Path) {
-    if !dir.exists() {
-        return;
-    }
-
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
-            let filename = path.file_name().unwrap().to_str().unwrap();
-
-            match std::fs::read_to_string(&path) {
-                Ok(content) => match parser.parse_content(&content) {
-                    Ok(_) => {
-                        panic!("Expected {} to fail parsing, but it succeeded", filename);
-                    }
-                    Err(_) => {}
-                },
-                Err(e) => {
-                    panic!("Failed to read error test file {}: {}", filename, e);
-                }
-            }
-        }
-    }
+    assert_directory_fails("errors");
 }
 
 /// Individual tests for specific parsing features
 #[cfg(test)]
 mod specific_tests {
     use super::*;
-    use sv_parser::{BinaryOp, Expression, ModuleItem, PortDirection};
 
     #[test]
     fn test_empty_module_structure() {
-        let parser = SystemVerilogParser::new(vec![], HashMap::new());
-        let content = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/empty_module.sv"),
-        )
-        .unwrap();
-
-        let result = parser.parse_content(&content).unwrap();
+        let result = assert_parse_ok("modules/empty_module.sv");
         assert_eq!(result.items.len(), 1);
 
         let item = result.module_item_arena.get(result.items[0]);
@@ -124,13 +46,7 @@ mod specific_tests {
 
     #[test]
     fn test_module_with_ports_structure() {
-        let parser = SystemVerilogParser::new(vec![], HashMap::new());
-        let content = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/modules/module_with_ports.sv"),
-        )
-        .unwrap();
-
-        let result = parser.parse_content(&content).unwrap();
+        let result = assert_parse_ok("modules/module_with_ports.sv");
 
         let item = result.module_item_arena.get(result.items[0]);
         if let ModuleItem::ModuleDeclaration {
@@ -154,24 +70,65 @@ mod specific_tests {
     }
 
     #[test]
-    fn test_binary_add_expression() {
-        let parser = SystemVerilogParser::new(vec![], HashMap::new());
-        let content = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/binary_add.sv"),
-        )
-        .unwrap();
-
-        let result = parser.parse_content(&content).unwrap();
+    fn test_module_with_array_ports_structure() {
+        let result = assert_parse_ok("modules/module_with_array_ports.sv");
 
         let item = result.module_item_arena.get(result.items[0]);
-        let ModuleItem::ModuleDeclaration { items, .. } = item else {
+        if let ModuleItem::ModuleDeclaration { name, ports, .. } = item {
+            assert_eq!(name, "test");
+            assert_eq!(ports.len(), 2);
+
+            // Check first port (input [3:0] a)
+            assert_eq!(ports[0].name, "a");
+            assert_eq!(ports[0].direction, Some(PortDirection::Input));
+            if let Some(ref range) = ports[0].range {
+                assert_eq!(range.msb, "3");
+                assert_eq!(range.lsb, "0");
+            } else {
+                panic!("Expected range for port a");
+            }
+
+            // Check second port (output [7:0] b)
+            assert_eq!(ports[1].name, "b");
+            assert_eq!(ports[1].direction, Some(PortDirection::Output));
+            if let Some(ref range) = ports[1].range {
+                assert_eq!(range.msb, "7");
+                assert_eq!(range.lsb, "0");
+            } else {
+                panic!("Expected range for port b");
+            }
+        } else {
             panic!("Expected module declaration");
-        };
-        let item0 = result.module_item_arena.get(items[0]);
-        let ModuleItem::Assignment { expr, .. } = item0 else {
-            panic!("Expected assignment");
-        };
-        let expr_val = result.expr_arena.get(*expr);
+        }
+    }
+
+    #[test]
+    fn test_multiple_modules_structure() {
+        let result = assert_parse_ok("modules/multiple_modules.sv");
+        assert_eq!(result.items.len(), 2);
+
+        let item0 = result.module_item_arena.get(result.items[0]);
+        if let ModuleItem::ModuleDeclaration { name, .. } = item0 {
+            assert_eq!(name, "first");
+        } else {
+            panic!("Expected first module");
+        }
+
+        let item1 = result.module_item_arena.get(result.items[1]);
+        if let ModuleItem::ModuleDeclaration { name, ports, .. } = item1 {
+            assert_eq!(name, "second");
+            assert_eq!(ports.len(), 1);
+        } else {
+            panic!("Expected second module");
+        }
+    }
+
+    #[test]
+    fn test_binary_add_expression() {
+        let result = assert_parse_ok("expressions/binary_add.sv");
+
+        let expr = first_assignment_expr(&result);
+        let expr_val = result.expr_arena.get(expr);
         let Expression::Binary {
             op, left, right, ..
         } = expr_val
@@ -193,47 +150,15 @@ mod specific_tests {
 
     #[test]
     fn test_logical_operators() {
-        let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-        // Test logical equivalence
-        let content = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("test_files/operators/logical_equivalence.sv"),
-        )
-        .unwrap();
-
-        let result = parser.parse_content(&content).unwrap();
-        let item = result.module_item_arena.get(result.items[0]);
-        let ModuleItem::ModuleDeclaration { items, .. } = item else {
-            panic!("Expected module declaration");
-        };
-        let item0 = result.module_item_arena.get(items[0]);
-        let ModuleItem::Assignment { expr, .. } = item0 else {
-            panic!("Expected assignment");
-        };
-        let expr_val = result.expr_arena.get(*expr);
+        let result = assert_parse_ok("operators/logical_equivalence.sv");
+        let expr_val = result.expr_arena.get(first_assignment_expr(&result));
         let Expression::Binary { op, .. } = expr_val else {
             panic!("Expected binary expression");
         };
         assert!(matches!(op, BinaryOp::LogicalEquiv));
 
-        // Test logical implication
-        let content = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("test_files/operators/logical_implication.sv"),
-        )
-        .unwrap();
-
-        let result = parser.parse_content(&content).unwrap();
-        let item = result.module_item_arena.get(result.items[0]);
-        let ModuleItem::ModuleDeclaration { items, .. } = item else {
-            panic!("Expected module declaration");
-        };
-        let item0 = result.module_item_arena.get(items[0]);
-        let ModuleItem::Assignment { expr, .. } = item0 else {
-            panic!("Expected assignment");
-        };
-        let expr_val = result.expr_arena.get(*expr);
+        let result = assert_parse_ok("operators/logical_implication.sv");
+        let expr_val = result.expr_arena.get(first_assignment_expr(&result));
         let Expression::Binary { op, .. } = expr_val else {
             panic!("Expected binary expression");
         };

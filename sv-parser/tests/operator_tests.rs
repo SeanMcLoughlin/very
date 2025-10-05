@@ -3,56 +3,29 @@
 //! This module tests operator parsing by running the parser against
 //! SystemVerilog files in the test_files/operators/ directory.
 
-use std::collections::HashMap;
-use std::path::Path;
-use sv_parser::{
-    BinaryOp, Expression, ModuleItem, ProceduralBlockType, Statement, SystemVerilogParser, UnaryOp,
+#[path = "common/mod.rs"]
+mod common;
+
+use common::{
+    assert_directory_parses, assert_parse_ok,
+    ast::{assignment_expr, first_assignment_expr, first_initial_block_statements},
 };
+use sv_parser::{BinaryOp, Expression, Statement, UnaryOp};
 
 /// Test parsing all operator test files
 #[test]
 fn test_parse_all_operator_files() {
-    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators");
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
-            let filename = path.file_name().unwrap().to_str().unwrap();
-
-            let content = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
-
-            parser
-                .parse_content(&content)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
-        }
-    }
+    assert_directory_parses("operators");
 }
 
 #[test]
 fn test_logical_equivalence_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_equivalence.sv"),
-    )
-    .unwrap();
+    let result = assert_parse_ok("operators/logical_equivalence.sv");
 
-    let result = parser.parse_content(&content).unwrap();
-
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
+    let expr = first_assignment_expr(&result);
 
     // Look up expression in arena
-    let expr_data = result.expr_arena.get(*expr);
+    let expr_data = result.expr_arena.get(expr);
     let Expression::Binary {
         op, left, right, ..
     } = expr_data
@@ -77,25 +50,12 @@ fn test_logical_equivalence_operator() {
 
 #[test]
 fn test_logical_implication_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_implication.sv"),
-    )
-    .unwrap();
+    let result = assert_parse_ok("operators/logical_implication.sv");
 
-    let result = parser.parse_content(&content).unwrap();
-
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
+    let expr = first_assignment_expr(&result);
 
     // Look up expression in arena
-    let expr_data = result.expr_arena.get(*expr);
+    let expr_data = result.expr_arena.get(expr);
     let Expression::Binary {
         op, left, right, ..
     } = expr_data
@@ -115,703 +75,144 @@ fn test_logical_implication_operator() {
 
 #[test]
 fn test_equality_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test equality
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/equality.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::Equal));
-
-    // Test not equal
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/not_equal.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::NotEqual));
-
-    // Test case equal
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/case_equal.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::CaseEqual));
-
-    // Test case not equal
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/case_not_equal.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::CaseNotEqual));
-
-    // Test wildcard equal
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/wildcard_equal.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::WildcardEqual));
-
-    // Test wildcard not equal
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/wildcard_not_equal.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::WildcardNotEqual));
+    for (path, expected_op) in [
+        ("operators/equality.sv", BinaryOp::Equal),
+        ("operators/not_equal.sv", BinaryOp::NotEqual),
+        ("operators/case_equal.sv", BinaryOp::CaseEqual),
+        ("operators/case_not_equal.sv", BinaryOp::CaseNotEqual),
+        ("operators/wildcard_equal.sv", BinaryOp::WildcardEqual),
+        (
+            "operators/wildcard_not_equal.sv",
+            BinaryOp::WildcardNotEqual,
+        ),
+    ] {
+        let result = assert_parse_ok(path);
+        let expr = first_assignment_expr(&result);
+        let expr_data = result.expr_arena.get(expr);
+        let Expression::Binary { op, .. } = expr_data else {
+            panic!("Expected binary expression");
+        };
+        assert_eq!(*op, expected_op);
+    }
 }
 
 #[test]
 fn test_logical_and_or_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test logical AND
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_and.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LogicalAnd));
-
-    // Test logical OR
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_or.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LogicalOr));
+    for (path, expected_op) in [
+        ("operators/logical_and.sv", BinaryOp::LogicalAnd),
+        ("operators/logical_or.sv", BinaryOp::LogicalOr),
+    ] {
+        let result = assert_parse_ok(path);
+        let expr = first_assignment_expr(&result);
+        let expr_data = result.expr_arena.get(expr);
+        let Expression::Binary { op, .. } = expr_data else {
+            panic!("Expected binary expression");
+        };
+        assert_eq!(*op, expected_op);
+    }
 }
 
 #[test]
 fn test_comparison_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/comparison_operators.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
+    let result = assert_parse_ok("operators/comparison_operators.sv");
 
     // This file contains 4 modules with different comparison operators
     assert_eq!(result.items.len(), 4);
 
-    // Test greater than
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::GreaterThan));
+    let expected_ops = [
+        BinaryOp::GreaterThan,
+        BinaryOp::LessThan,
+        BinaryOp::GreaterEqual,
+        BinaryOp::LessEqual,
+    ];
 
-    // Test less than
-    let item = result.module_item_arena.get(result.items[1]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LessThan));
-
-    // Test greater than or equal
-    let item = result.module_item_arena.get(result.items[2]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::GreaterEqual));
-
-    // Test less than or equal
-    let item = result.module_item_arena.get(result.items[3]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LessEqual));
+    for (module_index, expected_op) in expected_ops.into_iter().enumerate() {
+        let expr = assignment_expr(&result, module_index, 0);
+        let expr_data = result.expr_arena.get(expr);
+        let Expression::Binary { op, .. } = expr_data else {
+            panic!("Expected binary expression");
+        };
+        assert_eq!(*op, expected_op);
+    }
 }
 
 #[test]
 fn test_unary_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    for (path, expected_op, expected_ident) in [
+        ("operators/unary_not.sv", UnaryOp::Not, Some("a")),
+        ("operators/unary_plus.sv", UnaryOp::Plus, None),
+        ("operators/unary_minus.sv", UnaryOp::Minus, None),
+    ] {
+        let result = assert_parse_ok(path);
+        let expr = first_assignment_expr(&result);
+        let expr_data = result.expr_arena.get(expr);
+        let Expression::Unary { op, operand, .. } = expr_data else {
+            panic!("Expected unary expression");
+        };
+        assert_eq!(*op, expected_op);
 
-    // Test unary NOT (~)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/unary_not.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, operand, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::Not));
-    let Expression::Identifier(id, _) = result.expr_arena.get(*operand) else {
-        panic!("Expected identifier operand");
-    };
-    assert_eq!(id, "a");
-
-    // Test unary plus (+)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/unary_plus.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::Plus));
-
-    // Test unary minus (-)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/unary_minus.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::Minus));
+        if let Some(expected_name) = expected_ident {
+            let Expression::Identifier(name, _) = result.expr_arena.get(*operand) else {
+                panic!("Expected identifier operand");
+            };
+            assert_eq!(name, expected_name);
+        }
+    }
 }
 
 #[test]
 fn test_reduction_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test reduction AND (&)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_and.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionAnd));
-
-    // Test reduction OR (|)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_or.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionOr));
-
-    // Test reduction XOR (^)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_xor.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionXor));
-
-    // Test reduction NAND (~&)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_nand.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionNand));
-
-    // Test reduction NOR (~|)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_nor.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionNor));
-
-    // Test reduction XNOR (~^)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/reduction_xnor.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::ReductionXnor));
-
-    // Test logical NOT (!)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/operators/logical_not.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let item0 = result.module_item_arena.get(items[0]);
-    let ModuleItem::Assignment { expr, .. } = item0 else {
-        panic!("Expected assignment");
-    };
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Unary { op, .. } = expr_data else {
-        panic!("Expected unary expression");
-    };
-    assert!(matches!(op, UnaryOp::LogicalNot));
+    for (path, expected_op) in [
+        ("operators/reduction_and.sv", UnaryOp::ReductionAnd),
+        ("operators/reduction_or.sv", UnaryOp::ReductionOr),
+        ("operators/reduction_xor.sv", UnaryOp::ReductionXor),
+        ("operators/reduction_nand.sv", UnaryOp::ReductionNand),
+        ("operators/reduction_nor.sv", UnaryOp::ReductionNor),
+        ("operators/reduction_xnor.sv", UnaryOp::ReductionXnor),
+        ("operators/logical_not.sv", UnaryOp::LogicalNot),
+    ] {
+        let result = assert_parse_ok(path);
+        let expr = first_assignment_expr(&result);
+        let expr_data = result.expr_arena.get(expr);
+        let Expression::Unary { op, .. } = expr_data else {
+            panic!("Expected unary expression");
+        };
+        assert_eq!(*op, expected_op);
+    }
 }
 
 #[test]
 fn test_shift_operators() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-
-    // Test logical left shift (<<)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_log_shl.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    // Find the initial block
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
-    // Get the first statement (the assignment)
-    let first_stmt_ref = initial_block[0];
-    let first_stmt = result.stmt_arena.get(first_stmt_ref);
-    let Statement::Assignment { expr, .. } = first_stmt else {
-        panic!("Expected assignment, got {:?}", first_stmt);
-    };
-
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LogicalShiftLeft));
-
-    // Test logical right shift (>>)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_log_shr.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
-    let first_stmt_ref = initial_block[0];
-    let first_stmt = result.stmt_arena.get(first_stmt_ref);
-    let Statement::Assignment { expr, .. } = first_stmt else {
-        panic!("Expected assignment");
-    };
-
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::LogicalShiftRight));
-
-    // Test arithmetic left shift (<<<)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_arith_shl.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
-    let first_stmt_ref = initial_block[0];
-    let first_stmt = result.stmt_arena.get(first_stmt_ref);
-    let Statement::Assignment { expr, .. } = first_stmt else {
-        panic!("Expected assignment");
-    };
-
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::ArithmeticShiftLeft));
-
-    // Test arithmetic right shift (>>>)
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_arith_shr.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
-    let first_stmt_ref = initial_block[0];
-    let first_stmt = result.stmt_arena.get(first_stmt_ref);
-    let Statement::Assignment { expr, .. } = first_stmt else {
-        panic!("Expected assignment");
-    };
-
-    let expr_data = result.expr_arena.get(*expr);
-    let Expression::Binary { op, .. } = expr_data else {
-        panic!("Expected binary expression");
-    };
-    assert!(matches!(op, BinaryOp::ArithmeticShiftRight));
+    for (path, expected_op) in [
+        ("binary_op_log_shl.sv", BinaryOp::LogicalShiftLeft),
+        ("binary_op_log_shr.sv", BinaryOp::LogicalShiftRight),
+        ("binary_op_arith_shl.sv", BinaryOp::ArithmeticShiftLeft),
+        ("binary_op_arith_shr.sv", BinaryOp::ArithmeticShiftRight),
+    ] {
+        let result = assert_parse_ok(path);
+        let initial_block = first_initial_block_statements(&result);
+        let first_stmt_ref = initial_block[0];
+        let first_stmt = result.stmt_arena.get(first_stmt_ref);
+        let Statement::Assignment { expr, .. } = first_stmt else {
+            panic!("Expected assignment");
+        };
+        let expr_data = result.expr_arena.get(*expr);
+        let Expression::Binary { op, .. } = expr_data else {
+            panic!("Expected binary expression");
+        };
+        assert_eq!(*op, expected_op);
+    }
 }
 
 #[test]
 fn test_modulo_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_mod.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
+    let result = assert_parse_ok("binary_op_mod.sv");
+    let initial_block = first_initial_block_statements(&result);
     let first_stmt_ref = initial_block[0];
     let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
-
     let expr_data = result.expr_arena.get(*expr);
     let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");
@@ -821,44 +222,13 @@ fn test_modulo_operator() {
 
 #[test]
 fn test_bitwise_xnor_operator() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/binary_op_bit_xnor.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
-    let item = result.module_item_arena.get(result.items[0]);
-    let ModuleItem::ModuleDeclaration { items, .. } = item else {
-        panic!("Expected module declaration");
-    };
-    let initial_block = items
-        .iter()
-        .find_map(|&item_ref| {
-            let item = result.module_item_arena.get(item_ref);
-            if let ModuleItem::ProceduralBlock {
-                block_type,
-                statements,
-                ..
-            } = item
-            {
-                if *block_type == ProceduralBlockType::Initial {
-                    Some(statements)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .expect("Expected initial block");
-
+    let result = assert_parse_ok("binary_op_bit_xnor.sv");
+    let initial_block = first_initial_block_statements(&result);
     let first_stmt_ref = initial_block[0];
     let first_stmt = result.stmt_arena.get(first_stmt_ref);
     let Statement::Assignment { expr, .. } = first_stmt else {
         panic!("Expected assignment");
     };
-
     let expr_data = result.expr_arena.get(*expr);
     let Expression::Binary { op, .. } = expr_data else {
         panic!("Expected binary expression");

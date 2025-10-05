@@ -1,44 +1,31 @@
-//! Expression-related tests using file-based approach
+//! Expression-related tests using shared fixture utilities.
 //!
-//! This module tests expression parsing by running the parser against
-//! SystemVerilog files in the test_files/expressions/ directory.
+//! These tests verify parsing of SystemVerilog expression fixtures and
+//! assert specific AST shapes where relevant.
 
-use std::collections::HashMap;
-use std::path::Path;
-use sv_parser::{BinaryOp, Expression, ModuleItem, SystemVerilogParser};
+#[path = "common/mod.rs"]
+mod common;
+
+use common::{assert_directory_parses, assert_parse_ok};
+use sv_parser::{BinaryOp, Expression, ModuleItem};
 
 /// Test parsing all expression test files
 #[test]
 fn test_parse_all_expression_files() {
-    let test_files_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions");
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
+    assert_directory_parses("expressions");
+}
 
-    for entry in std::fs::read_dir(&test_files_dir).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) == Some("sv") {
-            let filename = path.file_name().unwrap().to_str().unwrap();
-
-            let content = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("Failed to read {}: {}", filename, e));
-
-            parser
-                .parse_content(&content)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", filename, e));
-        }
-    }
+sv_ok_tests! {
+    expr_binary_add => "expressions/binary_add.sv",
+    expr_module_with_assignment => "expressions/module_with_assignment.sv",
+    expr_numbers => "expressions/numbers.sv",
+    expr_parentheses => "expressions/parentheses.sv",
+    expr_systemverilog_number_with_z => "expressions/systemverilog_number_with_z.sv",
 }
 
 #[test]
 fn test_binary_add_expression() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/binary_add.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
+    let result = assert_parse_ok("expressions/binary_add.sv");
 
     let item = result.module_item_arena.get(result.items[0]);
     let ModuleItem::ModuleDeclaration { items, .. } = item else {
@@ -70,13 +57,7 @@ fn test_binary_add_expression() {
 
 #[test]
 fn test_number_expressions() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/numbers.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
+    let result = assert_parse_ok("expressions/numbers.sv");
 
     let item = result.module_item_arena.get(result.items[0]);
     let ModuleItem::ModuleDeclaration { items, .. } = item else {
@@ -108,13 +89,7 @@ fn test_number_expressions() {
 
 #[test]
 fn test_parentheses_precedence() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_files/expressions/parentheses.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
+    let result = assert_parse_ok("expressions/parentheses.sv");
 
     let item = result.module_item_arena.get(result.items[0]);
     let ModuleItem::ModuleDeclaration { items, .. } = item else {
@@ -147,14 +122,7 @@ fn test_parentheses_precedence() {
 
 #[test]
 fn test_systemverilog_numbers() {
-    let parser = SystemVerilogParser::new(vec![], HashMap::new());
-    let content = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("test_files/expressions/systemverilog_number_with_z.sv"),
-    )
-    .unwrap();
-
-    let result = parser.parse_content(&content).unwrap();
+    let result = assert_parse_ok("expressions/systemverilog_number_with_z.sv");
 
     let item = result.module_item_arena.get(result.items[0]);
     let ModuleItem::ModuleDeclaration { items, .. } = item else {
