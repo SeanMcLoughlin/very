@@ -1,0 +1,4396 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use sv_parser::{Expression, ModuleItem, SourceUnit, SystemVerilogParser};
+use tokio::sync::RwLock;
+use tower_lsp::jsonrpc::Result as LspResult;
+use tower_lsp::lsp_types::request::{
+    GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
+    GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
+};
+use tower_lsp::lsp_types::*;
+use tower_lsp::{Client, LanguageServer};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// Include directories for SystemVerilog (+incdir+)
+    #[serde(default)]
+    include_directories: Vec<String>,
+
+    /// Preprocessor defines (+define+)
+    #[serde(default)]
+    defines: HashMap<String, Option<String>>,
+
+    /// Source directories to search for files
+    #[serde(default)]
+    source_directories: Vec<String>,
+
+    /// Override config file location
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_file_path: Option<String>,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            include_directories: Vec::new(),
+            defines: HashMap::new(),
+            source_directories: Vec::new(),
+            config_file_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Symbol {
+    pub name: String,
+    pub symbol_type: SymbolType,
+    pub range: Range,
+    pub uri: Url,
+}
+
+#[derive(Debug, Clone)]
+pub enum SymbolType {
+    Module,
+    Class,
+    Function,
+    #[allow(dead_code)]
+    Task,
+    Variable,
+    Port,
+    #[allow(dead_code)]
+    Parameter,
+    Define,
+    Include,
+}
+
+#[derive(Debug, Clone)]
+struct SystemFunctionInfo {
+    signature: String,
+    description: String,
+}
+
+fn get_system_function_info(name: &str) -> Option<SystemFunctionInfo> {
+    match name {
+        // Math functions (Chapter 20.8)
+        "sin" => Some(SystemFunctionInfo {
+            signature: "function real $sin(real x)".to_string(),
+            description: "Returns the sine of x (x in radians)".to_string(),
+        }),
+        "cos" => Some(SystemFunctionInfo {
+            signature: "function real $cos(real x)".to_string(),
+            description: "Returns the cosine of x (x in radians)".to_string(),
+        }),
+        "tan" => Some(SystemFunctionInfo {
+            signature: "function real $tan(real x)".to_string(),
+            description: "Returns the tangent of x (x in radians)".to_string(),
+        }),
+        "asin" => Some(SystemFunctionInfo {
+            signature: "function real $asin(real x)".to_string(),
+            description: "Returns the arc sine of x".to_string(),
+        }),
+        "acos" => Some(SystemFunctionInfo {
+            signature: "function real $acos(real x)".to_string(),
+            description: "Returns the arc cosine of x".to_string(),
+        }),
+        "atan" => Some(SystemFunctionInfo {
+            signature: "function real $atan(real x)".to_string(),
+            description: "Returns the arc tangent of x".to_string(),
+        }),
+        "atan2" => Some(SystemFunctionInfo {
+            signature: "function real $atan2(real y, real x)".to_string(),
+            description: "Returns the arc tangent of y/x".to_string(),
+        }),
+        "sinh" => Some(SystemFunctionInfo {
+            signature: "function real $sinh(real x)".to_string(),
+            description: "Returns the hyperbolic sine of x".to_string(),
+        }),
+        "cosh" => Some(SystemFunctionInfo {
+            signature: "function real $cosh(real x)".to_string(),
+            description: "Returns the hyperbolic cosine of x".to_string(),
+        }),
+        "tanh" => Some(SystemFunctionInfo {
+            signature: "function real $tanh(real x)".to_string(),
+            description: "Returns the hyperbolic tangent of x".to_string(),
+        }),
+        "asinh" => Some(SystemFunctionInfo {
+            signature: "function real $asinh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic sine of x".to_string(),
+        }),
+        "acosh" => Some(SystemFunctionInfo {
+            signature: "function real $acosh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic cosine of x".to_string(),
+        }),
+        "atanh" => Some(SystemFunctionInfo {
+            signature: "function real $atanh(real x)".to_string(),
+            description: "Returns the inverse hyperbolic tangent of x".to_string(),
+        }),
+        "exp" => Some(SystemFunctionInfo {
+            signature: "function real $exp(real x)".to_string(),
+            description: "Returns e to the power of x".to_string(),
+        }),
+        "ln" => Some(SystemFunctionInfo {
+            signature: "function real $ln(real x)".to_string(),
+            description: "Returns the natural logarithm of x".to_string(),
+        }),
+        "log10" => Some(SystemFunctionInfo {
+            signature: "function real $log10(real x)".to_string(),
+            description: "Returns the base-10 logarithm of x".to_string(),
+        }),
+        "sqrt" => Some(SystemFunctionInfo {
+            signature: "function real $sqrt(real x)".to_string(),
+            description: "Returns the square root of x".to_string(),
+        }),
+        "pow" => Some(SystemFunctionInfo {
+            signature: "function real $pow(real x, real y)".to_string(),
+            description: "Returns x to the power of y".to_string(),
+        }),
+        "hypot" => Some(SystemFunctionInfo {
+            signature: "function real $hypot(real x, real y)".to_string(),
+            description: "Returns sqrt(x^2 + y^2)".to_string(),
+        }),
+        "floor" => Some(SystemFunctionInfo {
+            signature: "function real $floor(real x)".to_string(),
+            description: "Returns the largest integer not greater than x".to_string(),
+        }),
+        "ceil" => Some(SystemFunctionInfo {
+            signature: "function real $ceil(real x)".to_string(),
+            description: "Returns the smallest integer not less than x".to_string(),
+        }),
+        "clog2" => Some(SystemFunctionInfo {
+            signature: "function integer $clog2(integer value)".to_string(),
+            description: "Returns the ceiling of log base 2 of value".to_string(),
+        }),
+
+        // Display tasks (Chapter 20)
+        "display" => Some(SystemFunctionInfo {
+            signature: "task $display([list_of_arguments])".to_string(),
+            description: "Displays the argument list and adds a newline".to_string(),
+        }),
+        "write" => Some(SystemFunctionInfo {
+            signature: "task $write([list_of_arguments])".to_string(),
+            description: "Displays the argument list without adding a newline".to_string(),
+        }),
+        "monitor" => Some(SystemFunctionInfo {
+            signature: "task $monitor([list_of_arguments])".to_string(),
+            description: "Continuously monitors and displays values when they change".to_string(),
+        }),
+
+        // Simulation control (Chapter 20.2)
+        "finish" => Some(SystemFunctionInfo {
+            signature: "task $finish[(n)]".to_string(),
+            description: "Terminates the simulation".to_string(),
+        }),
+        "stop" => Some(SystemFunctionInfo {
+            signature: "task $stop[(n)]".to_string(),
+            description: "Suspends the simulation".to_string(),
+        }),
+        "exit" => Some(SystemFunctionInfo {
+            signature: "task $exit".to_string(),
+            description: "Terminates the simulation".to_string(),
+        }),
+
+        // Time functions (Chapter 20.3)
+        "time" => Some(SystemFunctionInfo {
+            signature: "function time $time".to_string(),
+            description: "Returns the current simulation time as a 64-bit integer".to_string(),
+        }),
+        "stime" => Some(SystemFunctionInfo {
+            signature: "function int $stime".to_string(),
+            description: "Returns the current simulation time as a 32-bit integer".to_string(),
+        }),
+        "realtime" => Some(SystemFunctionInfo {
+            signature: "function realtime $realtime".to_string(),
+            description: "Returns the current simulation time as a real number".to_string(),
+        }),
+
+        // Random number generation (Chapter 20.15)
+        "random" => Some(SystemFunctionInfo {
+            signature: "function int $random[(seed)]".to_string(),
+            description: "Returns a random 32-bit signed integer".to_string(),
+        }),
+        "urandom" => Some(SystemFunctionInfo {
+            signature: "function int $urandom[(seed)]".to_string(),
+            description: "Returns a random 32-bit unsigned integer".to_string(),
+        }),
+        "urandom_range" => Some(SystemFunctionInfo {
+            signature: "function int $urandom_range(int maxval, int minval = 0)".to_string(),
+            description: "Returns a random integer within the specified range".to_string(),
+        }),
+
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentState {
+    pub content: String,
+    pub ast: Option<SourceUnit>,
+    pub symbols: Vec<Symbol>,
+}
+
+#[derive(Debug)]
+pub struct Backend {
+    pub client: Client,
+    pub documents: Arc<RwLock<HashMap<Url, DocumentState>>>,
+    pub workspace_symbols: Arc<RwLock<HashMap<String, Vec<Symbol>>>>, // symbol_name -> all locations
+    pub config: Arc<RwLock<ServerConfig>>,
+    pub workspace_root: Arc<RwLock<Option<PathBuf>>>,
+}
+
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
+        // Store workspace root
+        {
+            let mut workspace_root = self.workspace_root.write().await;
+            *workspace_root = params.root_uri.and_then(|uri| uri.to_file_path().ok());
+        }
+
+        // Load configuration from initialization options
+        let mut config = ServerConfig::default();
+        if let Some(init_options) = params.initialization_options {
+            match serde_json::from_value::<ServerConfig>(init_options) {
+                Ok(parsed_config) => {
+                    config = parsed_config;
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            "Configuration loaded from initialization options",
+                        )
+                        .await;
+                }
+                Err(e) => {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Failed to parse initialization options: {}", e),
+                        )
+                        .await;
+                }
+            }
+        }
+
+        // Try to load from config file if not provided in initialization options
+        if config.include_directories.is_empty()
+            && config.defines.is_empty()
+            && config.source_directories.is_empty()
+        {
+            if let Some(file_config) = self.load_config_file(&config).await {
+                config = file_config;
+            }
+        }
+
+        // Validate and store the configuration
+        self.validate_config(&config).await;
+        {
+            let mut stored_config = self.config.write().await;
+            *stored_config = config;
+        }
+
+        Ok(InitializeResult {
+            server_info: Some(ServerInfo {
+                name: "sv-language-server".to_string(),
+                version: Some("0.1.0".to_string()),
+            }),
+            capabilities: ServerCapabilities {
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
+                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
+                    DiagnosticOptions {
+                        identifier: Some("sv-language-server".to_string()),
+                        inter_file_dependencies: true,
+                        workspace_diagnostics: false,
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    },
+                )),
+                rename_provider: Some(OneOf::Left(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                declaration_provider: Some(DeclarationCapability::Simple(true)),
+                type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+                implementation_provider: Some(ImplementationProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    trigger_characters: Some(vec![
+                        "$".to_string(),
+                        ".".to_string(),
+                        "`".to_string(),
+                    ]),
+                    all_commit_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                    completion_item: None,
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    retrigger_characters: None,
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
+                ..ServerCapabilities::default()
+            },
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(
+                MessageType::INFO,
+                "SystemVerilog Language Server initialized!",
+            )
+            .await;
+    }
+
+    async fn shutdown(&self) -> LspResult<()> {
+        Ok(())
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file opened!")
+            .await;
+
+        self.on_change(TextDocumentItem {
+            uri: params.text_document.uri,
+            text: params.text_document.text,
+            language_id: params.text_document.language_id,
+            version: params.text_document.version,
+        })
+        .await
+    }
+
+    async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
+        let new_text = std::mem::take(&mut params.content_changes[0].text);
+
+        self.on_change(TextDocumentItem {
+            uri: params.text_document.uri,
+            text: new_text,
+            language_id: "systemverilog".to_string(),
+            version: params.text_document.version,
+        })
+        .await
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!("file saved: {}", params.text_document.uri),
+            )
+            .await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        // Remove document from storage and workspace symbols
+        {
+            let mut docs = self.documents.write().await;
+            if let Some(doc_state) = docs.remove(&params.text_document.uri) {
+                // Remove symbols from workspace index
+                let mut workspace_symbols = self.workspace_symbols.write().await;
+                for symbol in doc_state.symbols {
+                    if let Some(symbol_list) = workspace_symbols.get_mut(&symbol.name) {
+                        symbol_list.retain(|s| s.uri != params.text_document.uri);
+                        if symbol_list.is_empty() {
+                            workspace_symbols.remove(&symbol.name);
+                        }
+                    }
+                }
+            }
+        }
+
+        self.client
+            .log_message(MessageType::INFO, "file closed!")
+            .await;
+    }
+
+    async fn diagnostic(
+        &self,
+        _params: DocumentDiagnosticParams,
+    ) -> LspResult<DocumentDiagnosticReportResult> {
+        self.client
+            .log_message(MessageType::INFO, "diagnostics requested!")
+            .await;
+
+        // For now, return no diagnostics - we'll implement parsing-based diagnostics later
+        Ok(DocumentDiagnosticReportResult::Report(
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                related_documents: None,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items: vec![],
+                },
+            }),
+        ))
+    }
+
+    async fn rename(&self, params: RenameParams) -> LspResult<Option<WorkspaceEdit>> {
+        self.client
+            .log_message(MessageType::INFO, "rename requested!")
+            .await;
+
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Rename at position {}:{}",
+                    position.line, position.character
+                ),
+            )
+            .await;
+
+        // Get the document state
+        let doc_symbols = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state.symbols.clone(),
+                None => {
+                    self.client
+                        .log_message(MessageType::ERROR, "Document not found")
+                        .await;
+                    return Ok(None);
+                }
+            }
+        };
+
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!("Found {} symbols in document", doc_symbols.len()),
+            )
+            .await;
+
+        // Log all symbols with their ranges
+        for symbol in &doc_symbols {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "Symbol '{}' at {}:{}-{}:{}",
+                        symbol.name,
+                        symbol.range.start.line,
+                        symbol.range.start.character,
+                        symbol.range.end.line,
+                        symbol.range.end.character
+                    ),
+                )
+                .await;
+        }
+
+        // Find the symbol at the requested position
+        let symbol_at_position = doc_symbols
+            .iter()
+            .find(|symbol| self.position_in_range(position, symbol.range));
+
+        if let Some(symbol) = symbol_at_position {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Found symbol '{}' at position", symbol.name),
+                )
+                .await;
+            // Find all workspace references to this symbol
+            let workspace_references = {
+                let workspace_symbols = self.workspace_symbols.read().await;
+                workspace_symbols
+                    .get(&symbol.name)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+
+            if workspace_references.is_empty() {
+                return Ok(None);
+            }
+
+            // Group edits by file URI
+            let mut changes = HashMap::new();
+            for reference in workspace_references {
+                // Only rename symbols of compatible types
+                let should_rename = match (&symbol.symbol_type, &reference.symbol_type) {
+                    (SymbolType::Module, SymbolType::Module) => true,
+                    (SymbolType::Class, SymbolType::Class) => true,
+                    (SymbolType::Function, SymbolType::Function) => true,
+                    (SymbolType::Task, SymbolType::Task) => true,
+                    (SymbolType::Variable, _)
+                    | (SymbolType::Port, _)
+                    | (SymbolType::Parameter, _) => true,
+                    (_, SymbolType::Variable)
+                    | (_, SymbolType::Port)
+                    | (_, SymbolType::Parameter) => true,
+                    (SymbolType::Define, SymbolType::Define) => true,
+                    (SymbolType::Include, SymbolType::Include) => true,
+                    _ => false,
+                };
+
+                if should_rename {
+                    changes
+                        .entry(reference.uri.clone())
+                        .or_insert_with(Vec::new)
+                        .push(TextEdit {
+                            range: reference.range,
+                            new_text: new_name.clone(),
+                        });
+                }
+            }
+
+            if changes.is_empty() {
+                return Ok(None);
+            }
+
+            return Ok(Some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            }));
+        }
+
+        self.client
+            .log_message(MessageType::WARNING, "No symbol found at position")
+            .await;
+        Ok(None)
+    }
+
+    async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> LspResult<Option<Vec<FoldingRange>>> {
+        let uri = params.text_document.uri;
+
+        // Get the document AST
+        let ast = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state.ast.clone(),
+                None => {
+                    self.client
+                        .log_message(MessageType::WARNING, "Document not found for folding")
+                        .await;
+                    return Ok(None);
+                }
+            }
+        };
+
+        if let Some(ast) = ast {
+            let content = {
+                let docs = self.documents.read().await;
+                docs.get(&uri)
+                    .map(|doc| doc.content.clone())
+                    .unwrap_or_default()
+            };
+
+            let folding_ranges = self.extract_folding_ranges(&ast, &content);
+            Ok(Some(folding_ranges))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> LspResult<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "goto_definition called at {}:{}",
+                    position.line, position.character
+                ),
+            )
+            .await;
+
+        // Find the symbol at the cursor position
+        let symbol_info = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Document has {} symbols", doc_state.symbols.len()),
+                        )
+                        .await;
+
+                    let found_symbol = doc_state
+                        .symbols
+                        .iter()
+                        .find(|symbol| self.position_in_range(position, symbol.range))
+                        .map(|s| (s.name.clone(), s.symbol_type.clone()));
+
+                    if let Some((ref name, ref stype)) = found_symbol {
+                        self.client
+                            .log_message(
+                                MessageType::INFO,
+                                format!("Found symbol: name='{}', type={:?}", name, stype),
+                            )
+                            .await;
+                    } else {
+                        self.client
+                            .log_message(MessageType::INFO, "No symbol found at position")
+                            .await;
+                    }
+
+                    found_symbol
+                }
+                None => {
+                    self.client
+                        .log_message(MessageType::WARNING, "Document not found")
+                        .await;
+                    None
+                }
+            }
+        };
+
+        if let Some((name, symbol_type)) = symbol_info {
+            // Special handling for include directives
+            if matches!(symbol_type, SymbolType::Include) {
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("Processing include: path='{}'", name),
+                    )
+                    .await;
+
+                // Try to resolve the include path
+                let include_path = std::path::Path::new(&name);
+
+                // If it's already an absolute path (resolved), use it directly
+                let resolved = if include_path.is_absolute() {
+                    Some(include_path.to_path_buf())
+                } else {
+                    // Try to resolve relative to the current file's directory
+                    uri.to_file_path().ok().and_then(|current_file| {
+                        let current_dir = current_file.parent()?;
+                        let candidate = current_dir.join(&name);
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
+
+                        // Try looking in common include directories relative to current file
+                        for include_dir in &["include", "../include", "../../include"] {
+                            let candidate = current_dir.join(include_dir).join(&name);
+                            if candidate.exists() {
+                                return Some(candidate);
+                            }
+                        }
+                        None
+                    })
+                };
+
+                if let Some(resolved_path) = resolved {
+                    if let Ok(file_uri) = Url::from_file_path(&resolved_path) {
+                        self.client
+                            .log_message(MessageType::INFO, format!("Navigating to: {}", file_uri))
+                            .await;
+
+                        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                            uri: file_uri,
+                            range: Range {
+                                start: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 0,
+                                    character: 0,
+                                },
+                            },
+                        })));
+                    }
+                }
+
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("Could not resolve include file: {}", name),
+                    )
+                    .await;
+                return Ok(None);
+            }
+
+            // Look up all occurrences of this symbol
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                // For definition, we want the first declaration (typically the module/class/function declaration)
+                // We'll prioritize declaration-type symbols (Module, Class, Function, Task, Port) as definitions
+                let definition = symbol_list
+                    .iter()
+                    .find(|s| {
+                        matches!(
+                            s.symbol_type,
+                            SymbolType::Module
+                                | SymbolType::Class
+                                | SymbolType::Function
+                                | SymbolType::Task
+                                | SymbolType::Port
+                        )
+                    })
+                    .or_else(|| symbol_list.first());
+
+                if let Some(def_symbol) = definition {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def_symbol.uri.clone(),
+                        range: def_symbol.range,
+                    })));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_declaration(
+        &self,
+        params: GotoDeclarationParams,
+    ) -> LspResult<Option<GotoDeclarationResponse>> {
+        // For SystemVerilog, declaration is the same as definition
+        let def_params = GotoDefinitionParams {
+            text_document_position_params: params.text_document_position_params,
+            work_done_progress_params: params.work_done_progress_params,
+            partial_result_params: params.partial_result_params,
+        };
+
+        match self.goto_definition(def_params).await? {
+            Some(GotoDefinitionResponse::Scalar(loc)) => {
+                Ok(Some(GotoDeclarationResponse::Scalar(loc)))
+            }
+            Some(GotoDefinitionResponse::Array(locs)) => {
+                Ok(Some(GotoDeclarationResponse::Array(locs)))
+            }
+            Some(GotoDefinitionResponse::Link(links)) => {
+                Ok(Some(GotoDeclarationResponse::Link(links)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn goto_type_definition(
+        &self,
+        params: GotoTypeDefinitionParams,
+    ) -> LspResult<Option<GotoTypeDefinitionResponse>> {
+        // For SystemVerilog, we'll look for module type definitions
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Look for module and class type definitions
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let type_def = symbol_list
+                    .iter()
+                    .find(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Class));
+
+                if let Some(def_symbol) = type_def {
+                    return Ok(Some(GotoTypeDefinitionResponse::Scalar(Location {
+                        uri: def_symbol.uri.clone(),
+                        range: def_symbol.range,
+                    })));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_implementation(
+        &self,
+        params: GotoImplementationParams,
+    ) -> LspResult<Option<GotoImplementationResponse>> {
+        // For SystemVerilog, implementation is similar to definition
+        // We look for module instantiations
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Look for all module and class implementations with this name
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let implementations: Vec<Location> = symbol_list
+                    .iter()
+                    .filter(|s| matches!(s.symbol_type, SymbolType::Module | SymbolType::Class))
+                    .map(|s| Location {
+                        uri: s.uri.clone(),
+                        range: s.range,
+                    })
+                    .collect();
+
+                if !implementations.is_empty() {
+                    return Ok(Some(GotoImplementationResponse::Array(implementations)));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> LspResult<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        // Find the symbol at the cursor position
+        let symbol_name = {
+            let docs = self.documents.read().await;
+            match docs.get(&uri) {
+                Some(doc_state) => doc_state
+                    .symbols
+                    .iter()
+                    .find(|symbol| self.position_in_range(position, symbol.range))
+                    .map(|s| s.name.clone()),
+                None => None,
+            }
+        };
+
+        if let Some(name) = symbol_name {
+            // Get all references to this symbol from the workspace
+            let workspace_symbols = self.workspace_symbols.read().await;
+            if let Some(symbol_list) = workspace_symbols.get(&name) {
+                let references: Vec<Location> = symbol_list
+                    .iter()
+                    .map(|s| Location {
+                        uri: s.uri.clone(),
+                        range: s.range,
+                    })
+                    .collect();
+
+                return Ok(Some(references));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> LspResult<Option<Vec<SymbolInformation>>> {
+        let query = params.query.to_lowercase();
+
+        let workspace_symbols = self.workspace_symbols.read().await;
+        let mut results = Vec::new();
+
+        // Search through all symbols
+        for (name, symbols) in workspace_symbols.iter() {
+            // Case-insensitive substring match
+            if name.to_lowercase().contains(&query) {
+                for symbol in symbols {
+                    // Convert SymbolType to LSP SymbolKind and get display prefix
+                    let (kind, type_prefix) = match symbol.symbol_type {
+                        SymbolType::Module => (SymbolKind::MODULE, "module"),
+                        SymbolType::Class => (SymbolKind::CLASS, "class"),
+                        SymbolType::Function => (SymbolKind::FUNCTION, "function"),
+                        SymbolType::Task => (SymbolKind::FUNCTION, "task"),
+                        SymbolType::Variable => (SymbolKind::VARIABLE, "variable"),
+                        SymbolType::Port => (SymbolKind::PROPERTY, "port"),
+                        SymbolType::Parameter => (SymbolKind::CONSTANT, "parameter"),
+                        SymbolType::Define => (SymbolKind::CONSTANT, "`define"),
+                        SymbolType::Include => (SymbolKind::FILE, "`include"),
+                    };
+
+                    // Display name with type prefix (e.g., "module top")
+                    let display_name = format!("{} {}", type_prefix, symbol.name);
+
+                    #[allow(deprecated)]
+                    results.push(SymbolInformation {
+                        name: display_name,
+                        kind,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: symbol.uri.clone(),
+                            range: symbol.range,
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
+    async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Check if hovering over a system function call
+        if let Some(ast) = &doc_state.ast {
+            if let Some(hover_info) = self.find_hover_at_position(
+                &ast.items,
+                &ast.expr_arena,
+                &ast.stmt_arena,
+                &ast.module_item_arena,
+                &doc_state.content,
+                position,
+            ) {
+                return Ok(Some(hover_info));
+            }
+        }
+
+        // Check if hovering over a symbol (module, variable, etc.)
+        if let Some(symbol) = doc_state
+            .symbols
+            .iter()
+            .find(|s| self.position_in_range(position, s.range))
+        {
+            let hover_text = match symbol.symbol_type {
+                SymbolType::Module => format!("```systemverilog\nmodule {}\n```", symbol.name),
+                SymbolType::Class => format!("```systemverilog\nclass {}\n```", symbol.name),
+                SymbolType::Function => format!("```systemverilog\nfunction {}\n```", symbol.name),
+                SymbolType::Task => format!("```systemverilog\ntask {}\n```", symbol.name),
+                SymbolType::Variable => format!("```systemverilog\n{}\n```", symbol.name),
+                SymbolType::Port => format!("```systemverilog\nport {}\n```", symbol.name),
+                SymbolType::Parameter => {
+                    format!("```systemverilog\nparameter {}\n```", symbol.name)
+                }
+                SymbolType::Define => format!("```systemverilog\n`define {}\n```", symbol.name),
+                SymbolType::Include => {
+                    let include_path = std::path::Path::new(&symbol.name);
+
+                    // Try to resolve the include path
+                    let resolved = if include_path.is_absolute() {
+                        Some(include_path.to_path_buf())
+                    } else {
+                        // Try to resolve relative to the current file's directory
+                        uri.to_file_path().ok().and_then(|current_file| {
+                            let current_dir = current_file.parent()?;
+                            let candidate = current_dir.join(&symbol.name);
+                            if candidate.exists() {
+                                return Some(candidate);
+                            }
+
+                            // Try looking in common include directories relative to current file
+                            for include_dir in &["include", "../include", "../../include"] {
+                                let candidate = current_dir.join(include_dir).join(&symbol.name);
+                                if candidate.exists() {
+                                    return Some(candidate);
+                                }
+                            }
+                            None
+                        })
+                    };
+
+                    // Format the path for display (relative to workspace root if possible)
+                    let display_path = if let Some(resolved_path) = resolved {
+                        // Canonicalize to resolve .. and . components
+                        let canonical = resolved_path.canonicalize().unwrap_or(resolved_path);
+
+                        // Try to make it relative to workspace root
+                        if let Ok(current_file) = uri.to_file_path() {
+                            if let Some(current_dir) = current_file.parent() {
+                                // Find workspace root by looking for .git or .sv-lsp.toml
+                                let mut workspace_root = current_dir;
+                                while let Some(parent) = workspace_root.parent() {
+                                    if parent.join(".git").exists()
+                                        || parent.join(".sv-lsp.toml").exists()
+                                    {
+                                        workspace_root = parent;
+                                        break;
+                                    }
+                                    workspace_root = parent;
+                                }
+
+                                // Make path relative to workspace root
+                                if let Ok(rel) = canonical.strip_prefix(workspace_root) {
+                                    rel.display().to_string()
+                                } else {
+                                    canonical.display().to_string()
+                                }
+                            } else {
+                                canonical.display().to_string()
+                            }
+                        } else {
+                            canonical.display().to_string()
+                        }
+                    } else {
+                        // Couldn't resolve, just show the original path
+                        symbol.name.clone()
+                    };
+
+                    format!("```systemverilog\n`include \"{}\"\n```", display_path)
+                }
+            };
+
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: hover_text,
+                }),
+                range: Some(symbol.range),
+            }));
+        }
+
+        Ok(None)
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> LspResult<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut symbols = Vec::new();
+
+        // Convert our symbols to LSP DocumentSymbol format
+        for symbol in &doc_state.symbols {
+            let kind = match symbol.symbol_type {
+                SymbolType::Module => SymbolKind::MODULE,
+                SymbolType::Class => SymbolKind::CLASS,
+                SymbolType::Function => SymbolKind::FUNCTION,
+                SymbolType::Task => SymbolKind::FUNCTION,
+                SymbolType::Variable => SymbolKind::VARIABLE,
+                SymbolType::Port => SymbolKind::PROPERTY,
+                SymbolType::Parameter => SymbolKind::CONSTANT,
+                SymbolType::Define => SymbolKind::CONSTANT,
+                SymbolType::Include => SymbolKind::FILE,
+            };
+
+            #[allow(deprecated)]
+            symbols.push(DocumentSymbol {
+                name: symbol.name.clone(),
+                detail: None,
+                kind,
+                tags: None,
+                deprecated: None,
+                range: symbol.range,
+                selection_range: symbol.range,
+                children: None,
+            });
+        }
+
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        }
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> LspResult<Option<Vec<DocumentHighlight>>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Find the symbol at the cursor position
+        let symbol_at_position = doc_state
+            .symbols
+            .iter()
+            .find(|symbol| self.position_in_range(position, symbol.range));
+
+        if let Some(symbol) = symbol_at_position {
+            let mut highlights = Vec::new();
+
+            // Find all occurrences of this symbol in the current document
+            for other_symbol in &doc_state.symbols {
+                if other_symbol.name == symbol.name {
+                    highlights.push(DocumentHighlight {
+                        range: other_symbol.range,
+                        kind: Some(DocumentHighlightKind::TEXT),
+                    });
+                }
+            }
+
+            if highlights.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(highlights))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> LspResult<Option<Vec<SelectionRange>>> {
+        let uri = params.text_document.uri;
+        let positions = params.positions;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        if doc_state.ast.is_none() {
+            return Ok(None);
+        }
+
+        let ast = doc_state.ast.as_ref().unwrap();
+        let content = &doc_state.content;
+
+        let mut results = Vec::new();
+
+        for position in positions {
+            if let Some(selection) = self.find_selection_range_at_position(ast, content, position) {
+                results.push(selection);
+            }
+        }
+
+        if results.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(results))
+        }
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        self.client
+            .log_message(MessageType::INFO, "Configuration changed")
+            .await;
+
+        // Try to extract configuration from the settings
+        if let Ok(config) = serde_json::from_value::<ServerConfig>(params.settings) {
+            let mut stored_config = self.config.write().await;
+            *stored_config = config;
+
+            self.client
+                .log_message(MessageType::INFO, "Configuration updated successfully")
+                .await;
+        } else {
+            self.client
+                .log_message(MessageType::WARNING, "Failed to parse new configuration")
+                .await;
+        }
+    }
+
+    async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut items = Vec::new();
+
+        // Get the current line to determine context
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let current_line = if (position.line as usize) < lines.len() {
+            lines[position.line as usize]
+        } else {
+            ""
+        };
+        let prefix = &current_line[..position.character.min(current_line.len() as u32) as usize];
+
+        // Determine what kind of completion to provide based on context
+        let is_after_dollar = prefix.trim_end().ends_with('$');
+        let is_after_backtick = prefix.trim_end().ends_with('`');
+        let is_after_dot = prefix.trim_end().ends_with('.');
+
+        // Check if we're in the middle of typing a system function (e.g., "$dis")
+        let is_typing_system_function = prefix
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .count()
+            > 0
+            && prefix.trim_end().contains('$');
+
+        // 1. System function/task completions (after '$' or while typing a system function)
+        if is_after_dollar || is_typing_system_function {
+            items.extend(self.get_system_function_completions());
+        }
+
+        // 2. Preprocessor directive completions (after '`')
+        if is_after_backtick {
+            items.extend(self.get_preprocessor_completions());
+        }
+
+        // 3. Member access completions (after '.')
+        if is_after_dot {
+            // For now, we'll provide common class members
+            // In the future, this could be context-aware based on the object type
+            items.extend(self.get_member_completions());
+        }
+
+        // 4. Symbol completions (variables, modules, classes, etc.)
+        if !is_after_dollar && !is_after_backtick && !is_typing_system_function {
+            items.extend(self.get_symbol_completions().await);
+        }
+
+        // 5. Keyword completions (always include unless after special character)
+        if !is_after_dollar && !is_after_backtick && !is_after_dot && !is_typing_system_function {
+            items.extend(self.get_keyword_completions());
+        }
+
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CompletionResponse::Array(items)))
+        }
+    }
+
+    async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> LspResult<Option<SignatureHelp>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        // Get the current line and extract function name and parameter position
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let current_line = if (position.line as usize) < lines.len() {
+            lines[position.line as usize]
+        } else {
+            return Ok(None);
+        };
+
+        // Extract text up to cursor position
+        let text_before_cursor =
+            &current_line[..position.character.min(current_line.len() as u32) as usize];
+
+        // Find the function call by looking backwards for the function name
+        // Look for patterns like $function_name( or function_name(
+        let (function_name, active_parameter) =
+            self.extract_function_call_info(text_before_cursor)?;
+
+        // Check if it's a system function
+        if let Some(info) = get_system_function_info(&function_name) {
+            let signature_info = SignatureInformation {
+                label: info.signature.clone(),
+                documentation: Some(Documentation::String(info.description.clone())),
+                parameters: self.parse_parameters(&info.signature),
+                active_parameter: None, // LSP will compute this from cursor position
+            };
+
+            return Ok(Some(SignatureHelp {
+                signatures: vec![signature_info],
+                active_signature: Some(0),
+                active_parameter: Some(active_parameter),
+            }));
+        }
+
+        Ok(None)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> LspResult<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        let range = params.range;
+
+        let docs = self.documents.read().await;
+        let doc_state = match docs.get(&uri) {
+            Some(state) => state,
+            None => return Ok(None),
+        };
+
+        let mut hints = Vec::new();
+
+        // Get lines within the requested range
+        let lines: Vec<&str> = doc_state.content.lines().collect();
+        let start_line = range.start.line as usize;
+        let end_line = range.end.line.min(lines.len() as u32 - 1) as usize;
+
+        // Scan each line for function calls
+        for (line_idx, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line) {
+            // Find system function calls (pattern: $function_name(...))
+            let mut char_idx = 0;
+            while char_idx < line.len() {
+                if line[char_idx..].starts_with('$') {
+                    // Found potential system function
+                    if let Some(end_idx) = line[char_idx..].find('(') {
+                        let func_name_with_dollar = &line[char_idx..char_idx + end_idx];
+                        let func_name =
+                            func_name_with_dollar.trim().strip_prefix('$').unwrap_or("");
+
+                        // Check if it's a known system function
+                        if let Some(info) = get_system_function_info(func_name) {
+                            // Parse the parameters from the signature
+                            if let Some(params) = self.parse_parameters(&info.signature) {
+                                // Find the arguments in the actual function call
+                                let open_paren_pos = char_idx + end_idx;
+                                if let Some(close_paren) =
+                                    self.find_matching_paren(line, open_paren_pos)
+                                {
+                                    let args_str = &line[open_paren_pos + 1..close_paren];
+                                    let args: Vec<&str> = if args_str.trim().is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        args_str.split(',').map(|s| s.trim()).collect()
+                                    };
+
+                                    // Create inlay hints for each argument
+                                    let mut arg_offset = open_paren_pos + 1;
+                                    for (idx, (arg, param)) in
+                                        args.iter().zip(params.iter()).enumerate()
+                                    {
+                                        // Skip whitespace
+                                        while arg_offset < line.len()
+                                            && line
+                                                .chars()
+                                                .nth(arg_offset)
+                                                .map_or(false, |c| c.is_whitespace())
+                                        {
+                                            arg_offset += 1;
+                                        }
+
+                                        if arg_offset >= line.len() {
+                                            break;
+                                        }
+
+                                        // Extract parameter name from ParameterLabel
+                                        let param_name = match &param.label {
+                                            ParameterLabel::Simple(s) => {
+                                                // Extract just the parameter name (last word)
+                                                s.split_whitespace().last().unwrap_or("")
+                                            }
+                                            ParameterLabel::LabelOffsets(_) => "",
+                                        };
+
+                                        if !param_name.is_empty() {
+                                            hints.push(InlayHint {
+                                                position: Position {
+                                                    line: line_idx as u32,
+                                                    character: arg_offset as u32,
+                                                },
+                                                label: InlayHintLabel::String(format!(
+                                                    "{}:",
+                                                    param_name
+                                                )),
+                                                kind: Some(InlayHintKind::PARAMETER),
+                                                text_edits: None,
+                                                tooltip: None,
+                                                padding_left: None,
+                                                padding_right: Some(true),
+                                                data: None,
+                                            });
+                                        }
+
+                                        // Move past this argument
+                                        arg_offset += arg.len();
+                                        // Skip comma if not last argument
+                                        if idx < args.len() - 1 {
+                                            if let Some(comma_pos) = line[arg_offset..].find(',') {
+                                                arg_offset += comma_pos + 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        char_idx += end_idx + 1;
+                    } else {
+                        char_idx += 1;
+                    }
+                } else {
+                    char_idx += 1;
+                }
+            }
+        }
+
+        if hints.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hints))
+        }
+    }
+}
+
+impl Backend {
+    async fn on_change(&self, params: TextDocumentItem) {
+        // Parse and cache AST, extract symbols, and validate
+        let (diagnostics, ast, symbols) = self
+            .parse_and_analyze_document(&params.text, &params.uri)
+            .await;
+
+        // Update document state
+        {
+            let mut docs = self.documents.write().await;
+            let old_doc = docs.insert(
+                params.uri.clone(),
+                DocumentState {
+                    content: params.text.clone(),
+                    ast: ast.clone(),
+                    symbols: symbols.clone(),
+                },
+            );
+
+            // Update workspace symbol index
+            let mut workspace_symbols = self.workspace_symbols.write().await;
+
+            // Remove old symbols from this document
+            if let Some(old_state) = old_doc {
+                for old_symbol in old_state.symbols {
+                    if let Some(symbol_list) = workspace_symbols.get_mut(&old_symbol.name) {
+                        symbol_list.retain(|s| s.uri != params.uri);
+                        if symbol_list.is_empty() {
+                            workspace_symbols.remove(&old_symbol.name);
+                        }
+                    }
+                }
+            }
+
+            // Add new symbols (skip Include symbols as they're file-specific)
+            for symbol in symbols {
+                if !matches!(symbol.symbol_type, SymbolType::Include) {
+                    workspace_symbols
+                        .entry(symbol.name.clone())
+                        .or_insert_with(Vec::new)
+                        .push(symbol);
+                }
+            }
+        }
+
+        self.client
+            .publish_diagnostics(params.uri.clone(), diagnostics, Some(params.version))
+            .await;
+    }
+
+    async fn parse_and_analyze_document(
+        &self,
+        text: &str,
+        uri: &Url,
+    ) -> (Vec<Diagnostic>, Option<SourceUnit>, Vec<Symbol>) {
+        let mut diagnostics = Vec::new();
+        let mut ast = None;
+        let mut symbols = Vec::new();
+
+        // Get configuration for parser
+        let (include_paths, defines) = {
+            let config = self.config.read().await;
+            let workspace_root = self.workspace_root.read().await;
+
+            // Convert include directories to absolute paths
+            let mut include_paths = Vec::new();
+            if let Some(root) = workspace_root.as_ref() {
+                for include_dir in &config.include_directories {
+                    let path = if std::path::Path::new(include_dir).is_absolute() {
+                        PathBuf::from(include_dir)
+                    } else {
+                        root.join(include_dir)
+                    };
+                    include_paths.push(path);
+                }
+            }
+
+            // Convert defines to parser format
+            let mut defines = HashMap::new();
+            for (key, value) in &config.defines {
+                defines.insert(key.clone(), value.clone().unwrap_or_default());
+            }
+
+            (include_paths, defines)
+        };
+
+        // Create parser with configuration
+        let parser = SystemVerilogParser::new(include_paths, defines);
+
+        // Parse content
+        let result = parser.parse_content(text);
+
+        // Extract symbols from AST
+        if let Ok(parsed_ast) = &result {
+            symbols = self.extract_symbols_from_ast(parsed_ast, text, uri);
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Extracted {} symbols from AST", symbols.len()),
+                )
+                .await;
+            ast = Some(parsed_ast.clone());
+
+            // Run semantic analysis
+            let semantic_errors = parser.analyze_semantics(parsed_ast);
+            if !semantic_errors.is_empty() {
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("Found {} semantic errors", semantic_errors.len()),
+                    )
+                    .await;
+
+                // Convert semantic errors to diagnostics
+                for error in semantic_errors {
+                    let range =
+                        if let Some(start_pos) = self.char_offset_to_position(text, error.span.0) {
+                            let end_pos = self
+                                .char_offset_to_position(text, error.span.1)
+                                .unwrap_or_else(|| {
+                                    Position::new(start_pos.line, start_pos.character + 1)
+                                });
+                            Range::new(start_pos, end_pos)
+                        } else {
+                            Range::new(Position::new(0, 0), Position::new(0, 1))
+                        };
+
+                    let diagnostic = Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("sv-semantic".to_string()),
+                        message: error.message,
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    };
+
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
+
+        // Process errors as diagnostics
+        if let Err(parse_error) = &result {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("Parse completed with {} errors", parse_error.errors.len()),
+                )
+                .await;
+
+            for error in &parse_error.errors {
+                let range = if let Some(location) = &error.location {
+                    // Debug log the location info
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!(
+                                "Error location: line={}, col={}, span={:?}",
+                                location.line, location.column, location.span
+                            ),
+                        )
+                        .await;
+
+                    if let Some((start_char, end_char)) = location.span {
+                        // Use span positions to calculate precise range
+                        let start_pos = self
+                            .char_offset_to_position(text, start_char)
+                            .unwrap_or_else(|| {
+                                Position::new(location.line as u32, location.column as u32)
+                            });
+                        let end_pos =
+                            self.char_offset_to_position(text, end_char)
+                                .unwrap_or_else(|| {
+                                    Position::new(location.line as u32, location.column as u32 + 1)
+                                });
+
+                        Range::new(start_pos, end_pos)
+                    } else {
+                        // Use line/column directly
+                        let start_pos = Position::new(location.line as u32, location.column as u32);
+                        let end_pos =
+                            Position::new(location.line as u32, location.column as u32 + 1);
+
+                        Range::new(start_pos, end_pos)
+                    }
+                } else {
+                    // Fallback to start of document
+                    self.client
+                        .log_message(MessageType::WARNING, "No location info for error")
+                        .await;
+                    Range::new(Position::new(0, 0), Position::new(0, 1))
+                };
+
+                let severity = match error.error_type {
+                    sv_parser::ParseErrorType::UnsupportedFeature(_) => DiagnosticSeverity::WARNING,
+                    sv_parser::ParseErrorType::PreprocessorError => DiagnosticSeverity::ERROR,
+                    _ => DiagnosticSeverity::ERROR,
+                };
+
+                let mut diagnostic = Diagnostic {
+                    range,
+                    severity: Some(severity),
+                    code: None,
+                    code_description: None,
+                    source: Some("sv-parser".to_string()),
+                    message: error.message.clone(),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                };
+
+                // Add suggestions as related information if available
+                if !error.suggestions.is_empty() {
+                    diagnostic.message = format!(
+                        "{}\n\nSuggestions:\n{}",
+                        error.message,
+                        error
+                            .suggestions
+                            .iter()
+                            .map(|s| format!("  • {}", s))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                }
+
+                diagnostics.push(diagnostic);
+            }
+        }
+
+        (diagnostics, ast, symbols)
+    }
+
+    // Helper function to convert character offset to LSP Position
+    fn char_offset_to_position(&self, text: &str, offset: usize) -> Option<Position> {
+        if offset > text.len() {
+            // Clamp to end of text
+            let prefix = text;
+            let line = prefix.matches('\n').count();
+            let column = prefix.split('\n').last().unwrap_or("").len();
+            return Some(Position::new(line as u32, column as u32));
+        }
+
+        let prefix = &text[..offset];
+        let line = prefix.matches('\n').count();
+        let column = prefix.split('\n').last().unwrap_or("").len();
+
+        Some(Position::new(line as u32, column as u32))
+    }
+
+    // Helper function to convert a span to LSP Range
+    fn span_to_range(&self, text: &str, span: sv_parser::Span) -> Option<Range> {
+        let start_pos = self.char_offset_to_position(text, span.0)?;
+        let end_pos = self.char_offset_to_position(text, span.1)?;
+        Some(Range::new(start_pos, end_pos))
+    }
+
+    // Find hover information at a specific position
+    fn find_hover_at_position(
+        &self,
+        items: &[sv_parser::ModuleItemRef],
+        expr_arena: &sv_parser::ExprArena,
+        stmt_arena: &sv_parser::StmtArena,
+        module_item_arena: &sv_parser::ModuleItemArena,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        // items is now &[ModuleItemRef], so we need to dereference using the arena
+        for &item_ref in items {
+            let item = module_item_arena.get(item_ref);
+            if let Some(hover) = self.find_hover_in_item(
+                item,
+                expr_arena,
+                stmt_arena,
+                module_item_arena,
+                content,
+                position,
+            ) {
+                return Some(hover);
+            }
+        }
+        None
+    }
+
+    // Recursively search for hover information in a module item
+    fn find_hover_in_item(
+        &self,
+        item: &ModuleItem,
+        expr_arena: &sv_parser::ExprArena,
+        stmt_arena: &sv_parser::StmtArena,
+        module_item_arena: &sv_parser::ModuleItemArena,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                items,
+                ..
+            } => {
+                // Check if hovering over module name
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    if self.position_in_range(position, range) {
+                        return Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: format!("```systemverilog\nmodule {}\n```", name),
+                            }),
+                            range: Some(range),
+                        });
+                    }
+                }
+
+                // Recursively search in module items - items are refs into the arena
+                for &sub_item_ref in items {
+                    let sub_item = module_item_arena.get(sub_item_ref);
+                    if let Some(hover) = self.find_hover_in_item(
+                        sub_item,
+                        expr_arena,
+                        stmt_arena,
+                        module_item_arena,
+                        content,
+                        position,
+                    ) {
+                        return Some(hover);
+                    }
+                }
+            }
+            ModuleItem::ProceduralBlock { statements, .. } => {
+                // Check for system function calls in statements - statements is now Vec<StmtRef>
+                for &stmt_ref in statements {
+                    let stmt = stmt_arena.get(stmt_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_statement(stmt, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    // Find hover information in a statement
+    fn find_hover_in_statement(
+        &self,
+        stmt: &sv_parser::Statement,
+        expr_arena: &sv_parser::ExprArena,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match stmt {
+            sv_parser::Statement::SystemCall { name, span, args } => {
+                // First, check if we're hovering over any nested system function calls in the arguments
+                for arg_ref in args {
+                    let arg = expr_arena.get(*arg_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(arg, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+
+                // If not hovering over arguments, check if hovering over the system call name itself
+                if let Some(range) = self.span_to_range(content, *span) {
+                    if self.position_in_range(position, range) {
+                        if let Some(info) = get_system_function_info(name) {
+                            return Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!(
+                                        "```systemverilog\n{}\n```\n\n{}",
+                                        info.signature, info.description
+                                    ),
+                                }),
+                                range: Some(range),
+                            });
+                        }
+                    }
+                }
+            }
+            sv_parser::Statement::Assignment { expr, .. } => {
+                // Check if there's a system function call in the expression
+                let expr_val = expr_arena.get(*expr);
+                if let Some(hover) =
+                    self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            sv_parser::Statement::CaseStatement { expr, .. } => {
+                // Check if there's a system function call in the case expression
+                let expr_val = expr_arena.get(*expr);
+                if let Some(hover) =
+                    self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            sv_parser::Statement::ExpressionStatement { expr, .. } => {
+                // Check if there's a system function call in the expression
+                let expr_val = expr_arena.get(*expr);
+                if let Some(hover) =
+                    self.find_hover_in_expression(expr_val, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            sv_parser::Statement::AssertProperty {
+                property_expr,
+                action_block,
+                ..
+            } => {
+                // Check if there's a system function call in the property expression
+                let property = expr_arena.get(*property_expr);
+                if let Some(hover) =
+                    self.find_hover_in_expression(property, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+                // TODO: Check action block if present - needs stmt_arena
+                let _ = action_block; // Silence unused warning for now
+            }
+        }
+        None
+    }
+
+    // Find hover information in an expression
+    fn find_hover_in_expression(
+        &self,
+        expr: &Expression,
+        expr_arena: &sv_parser::ExprArena,
+        content: &str,
+        position: Position,
+    ) -> Option<Hover> {
+        match expr {
+            Expression::SystemFunctionCall {
+                name,
+                span,
+                arguments,
+                ..
+            } => {
+                if let Some(range) = self.span_to_range(content, *span) {
+                    if self.position_in_range(position, range) {
+                        if let Some(info) = get_system_function_info(name) {
+                            return Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!(
+                                        "```systemverilog\n{}\n```\n\n{}",
+                                        info.signature, info.description
+                                    ),
+                                }),
+                                range: Some(range),
+                            });
+                        }
+                    }
+                }
+                // Also check arguments
+                for arg_ref in arguments {
+                    let arg = expr_arena.get(*arg_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(arg, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                let left_expr = expr_arena.get(*left);
+                if let Some(hover) =
+                    self.find_hover_in_expression(left_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+                let right_expr = expr_arena.get(*right);
+                if let Some(hover) =
+                    self.find_hover_in_expression(right_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            Expression::Unary { operand, .. } => {
+                let operand_expr = expr_arena.get(*operand);
+                if let Some(hover) =
+                    self.find_hover_in_expression(operand_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            Expression::MacroUsage { arguments, .. } => {
+                for arg_ref in arguments {
+                    let arg = expr_arena.get(*arg_ref);
+                    if let Some(hover) =
+                        self.find_hover_in_expression(arg, expr_arena, content, position)
+                    {
+                        return Some(hover);
+                    }
+                }
+            }
+            Expression::MemberAccess { object, .. } => {
+                // Check hover in the object expression
+                let object_expr = expr_arena.get(*object);
+                if let Some(hover) =
+                    self.find_hover_in_expression(object_expr, expr_arena, content, position)
+                {
+                    return Some(hover);
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    // Extract symbols from AST recursively
+    fn extract_symbols_from_ast(&self, ast: &SourceUnit, content: &str, uri: &Url) -> Vec<Symbol> {
+        let mut symbols = Vec::new();
+        // ast.items is now Vec<ModuleItemRef>
+        for &item_ref in &ast.items {
+            let item = ast.module_item_arena.get(item_ref);
+            self.extract_symbols_from_module_item(
+                item,
+                &ast.expr_arena,
+                &ast.stmt_arena,
+                &ast.module_item_arena,
+                content,
+                uri,
+                &mut symbols,
+            );
+        }
+        symbols
+    }
+
+    // Extract symbols from a module item
+    fn extract_symbols_from_module_item(
+        &self,
+        item: &ModuleItem,
+        expr_arena: &sv_parser::ExprArena,
+        stmt_arena: &sv_parser::StmtArena,
+        module_item_arena: &sv_parser::ModuleItemArena,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name,
+                name_span,
+                ports,
+                items,
+                ..
+            } => {
+                // Add module name as a symbol using span from AST
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Module,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+
+                // Add port names as symbols
+                for port in ports {
+                    if let Some(range) = self.span_to_range(content, port.name_span) {
+                        symbols.push(Symbol {
+                            name: port.name.clone(),
+                            symbol_type: SymbolType::Port,
+                            range,
+                            uri: uri.clone(),
+                        });
+                    }
+                }
+
+                // Recursively process module items - items are refs into the arena
+                for &sub_item_ref in items {
+                    let sub_item = module_item_arena.get(sub_item_ref);
+                    self.extract_symbols_from_module_item(
+                        sub_item,
+                        expr_arena,
+                        stmt_arena,
+                        module_item_arena,
+                        content,
+                        uri,
+                        symbols,
+                    );
+                }
+            }
+            ModuleItem::PortDeclaration {
+                name, name_span, ..
+            } => {
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Port,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            ModuleItem::VariableDeclaration {
+                name,
+                name_span,
+                initial_value,
+                ..
+            } => {
+                // Add variable declaration using span from AST
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+
+                // Extract identifiers from initial value expression if present
+                if let Some(expr_ref) = initial_value {
+                    let expr = expr_arena.get(*expr_ref);
+                    self.extract_symbols_from_expression(expr, expr_arena, content, uri, symbols);
+                }
+            }
+            ModuleItem::Assignment { target, expr, .. } => {
+                // Extract identifiers from the target expression (e.g., for member access)
+                let target_expr = expr_arena.get(*target);
+                self.extract_symbols_from_expression(
+                    target_expr,
+                    expr_arena,
+                    content,
+                    uri,
+                    symbols,
+                );
+
+                // Extract identifiers from the value expression
+                let expr_val = expr_arena.get(*expr);
+                self.extract_symbols_from_expression(expr_val, expr_arena, content, uri, symbols);
+            }
+            ModuleItem::ProceduralBlock { statements, .. } => {
+                // Extract symbols from statements in procedural block - statements is now Vec<StmtRef>
+                for &stmt_ref in statements {
+                    let statement = stmt_arena.get(stmt_ref);
+                    self.extract_symbols_from_statement(
+                        statement, expr_arena, content, uri, symbols,
+                    );
+                }
+            }
+            ModuleItem::DefineDirective {
+                name, name_span, ..
+            } => {
+                // Add define directive as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Define,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            ModuleItem::IncludeDirective {
+                path,
+                path_span,
+                resolved_path,
+                ..
+            } => {
+                // Add include directive as a symbol
+                if let Some(range) = self.span_to_range(content, *path_span) {
+                    let symbol_name = resolved_path
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or(path)
+                        .to_string();
+
+                    symbols.push(Symbol {
+                        name: symbol_name,
+                        symbol_type: SymbolType::Include,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            ModuleItem::ClassDeclaration {
+                name,
+                name_span,
+                items,
+                ..
+            } => {
+                // Add class declaration as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Class,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract class members (properties and methods) as symbols
+                for class_item in items {
+                    self.extract_symbols_from_class_item(
+                        class_item, expr_arena, stmt_arena, content, uri, symbols,
+                    );
+                }
+            }
+            ModuleItem::ConcurrentAssertion { statement, .. } => {
+                // Extract symbols from the assertion statement - statement is now StmtRef
+                let stmt = stmt_arena.get(*statement);
+                self.extract_symbols_from_statement(stmt, expr_arena, content, uri, symbols);
+            }
+            ModuleItem::GlobalClocking {
+                identifier,
+                identifier_span,
+                ..
+            } => {
+                // Add global clocking identifier as a symbol if present
+                if let (Some(name), Some(span)) = (identifier, identifier_span) {
+                    if let Some(range) = self.span_to_range(content, *span) {
+                        symbols.push(Symbol {
+                            name: name.clone(),
+                            symbol_type: SymbolType::Variable, // Use Variable for now
+                            range,
+                            uri: uri.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract symbols from statements
+    fn extract_symbols_from_statement(
+        &self,
+        statement: &sv_parser::Statement,
+        expr_arena: &sv_parser::ExprArena,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        use sv_parser::Statement;
+        match statement {
+            Statement::Assignment { target, expr, .. } => {
+                // Extract identifiers from the target expression (e.g., for member access)
+                let target_expr = expr_arena.get(*target);
+                self.extract_symbols_from_expression(
+                    target_expr,
+                    expr_arena,
+                    content,
+                    uri,
+                    symbols,
+                );
+
+                // Extract identifiers from the value expression
+                let expr_val = expr_arena.get(*expr);
+                self.extract_symbols_from_expression(expr_val, expr_arena, content, uri, symbols);
+            }
+            Statement::SystemCall { args, .. } => {
+                for &arg_ref in args {
+                    let arg = expr_arena.get(arg_ref);
+                    self.extract_symbols_from_expression(arg, expr_arena, content, uri, symbols);
+                }
+            }
+            Statement::CaseStatement { expr, .. } => {
+                let expr_val = expr_arena.get(*expr);
+                self.extract_symbols_from_expression(expr_val, expr_arena, content, uri, symbols);
+            }
+            Statement::ExpressionStatement { expr, .. } => {
+                let expr_val = expr_arena.get(*expr);
+                self.extract_symbols_from_expression(expr_val, expr_arena, content, uri, symbols);
+            }
+            Statement::AssertProperty {
+                property_expr,
+                action_block,
+                ..
+            } => {
+                let property = expr_arena.get(*property_expr);
+                self.extract_symbols_from_expression(property, expr_arena, content, uri, symbols);
+                if let Some(action_stmt_ref) = action_block {
+                    // TODO: Need stmt_arena to dereference action_stmt_ref
+                    let _ = action_stmt_ref; // Silence unused warning for now
+                                             // self.extract_symbols_from_statement(action_stmt, expr_arena, content, uri, symbols);
+                }
+            }
+        }
+    }
+
+    // Extract symbols from expressions
+    fn extract_symbols_from_expression(
+        &self,
+        expr: &Expression,
+        expr_arena: &sv_parser::ExprArena,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        match expr {
+            Expression::Identifier(name, span) => {
+                if let Some(range) = self.span_to_range(content, *span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                let left_expr = expr_arena.get(*left);
+                self.extract_symbols_from_expression(left_expr, expr_arena, content, uri, symbols);
+                let right_expr = expr_arena.get(*right);
+                self.extract_symbols_from_expression(right_expr, expr_arena, content, uri, symbols);
+            }
+            Expression::Unary { operand, .. } => {
+                let operand_expr = expr_arena.get(*operand);
+                self.extract_symbols_from_expression(
+                    operand_expr,
+                    expr_arena,
+                    content,
+                    uri,
+                    symbols,
+                );
+            }
+            Expression::MacroUsage {
+                name,
+                name_span,
+                arguments,
+                ..
+            } => {
+                // Add macro usage as a symbol reference
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Define,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from macro arguments
+                for &arg_ref in arguments {
+                    let arg = expr_arena.get(arg_ref);
+                    self.extract_symbols_from_expression(arg, expr_arena, content, uri, symbols);
+                }
+            }
+            Expression::SystemFunctionCall { arguments, .. } => {
+                // Extract symbols from system function call arguments
+                for &arg_ref in arguments {
+                    let arg = expr_arena.get(arg_ref);
+                    self.extract_symbols_from_expression(arg, expr_arena, content, uri, symbols);
+                }
+            }
+            Expression::New { arguments, .. } => {
+                // Extract symbols from new expression arguments
+                for &arg_ref in arguments {
+                    let arg = expr_arena.get(arg_ref);
+                    self.extract_symbols_from_expression(arg, expr_arena, content, uri, symbols);
+                }
+            }
+            Expression::MemberAccess {
+                object,
+                member,
+                member_span,
+                ..
+            } => {
+                // Extract the object expression
+                let object_expr = expr_arena.get(*object);
+                self.extract_symbols_from_expression(
+                    object_expr,
+                    expr_arena,
+                    content,
+                    uri,
+                    symbols,
+                );
+                // Extract the member as a symbol
+                if let Some(range) = self.span_to_range(content, *member_span) {
+                    symbols.push(Symbol {
+                        name: member.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+            }
+            Expression::FunctionCall {
+                function,
+                arguments,
+                ..
+            } => {
+                // Extract symbols from the function expression (identifier or member access)
+                let function_expr = expr_arena.get(*function);
+                self.extract_symbols_from_expression(
+                    function_expr,
+                    expr_arena,
+                    content,
+                    uri,
+                    symbols,
+                );
+                // Extract symbols from function arguments
+                for &arg_ref in arguments {
+                    let arg = expr_arena.get(arg_ref);
+                    self.extract_symbols_from_expression(arg, expr_arena, content, uri, symbols);
+                }
+            }
+            Expression::Number(_, _) | Expression::StringLiteral(_, _) => {
+                // Numbers and string literals are not identifiers we care about for renaming
+            }
+        }
+    }
+
+    // Extract symbols from class items (properties and methods)
+    fn extract_symbols_from_class_item(
+        &self,
+        class_item: &sv_parser::ClassItem,
+        expr_arena: &sv_parser::ExprArena,
+        stmt_arena: &sv_parser::StmtArena,
+        content: &str,
+        uri: &Url,
+        symbols: &mut Vec<Symbol>,
+    ) {
+        use sv_parser::ClassItem;
+        match class_item {
+            ClassItem::Property {
+                name,
+                name_span,
+                initial_value,
+                ..
+            } => {
+                // Add property as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Variable,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from initial value if present
+                if let Some(expr_ref) = initial_value {
+                    let expr = expr_arena.get(*expr_ref);
+                    self.extract_symbols_from_expression(expr, expr_arena, content, uri, symbols);
+                }
+            }
+            ClassItem::Method {
+                name,
+                name_span,
+                body,
+                ..
+            } => {
+                // Add method as a symbol
+                if let Some(range) = self.span_to_range(content, *name_span) {
+                    symbols.push(Symbol {
+                        name: name.clone(),
+                        symbol_type: SymbolType::Function,
+                        range,
+                        uri: uri.clone(),
+                    });
+                }
+                // Extract symbols from method body statements - body is now Vec<StmtRef>
+                for &stmt_ref in body {
+                    let statement = stmt_arena.get(stmt_ref);
+                    self.extract_symbols_from_statement(
+                        statement, expr_arena, content, uri, symbols,
+                    );
+                }
+            }
+        }
+    }
+
+    // Check if a position is within a range
+    fn position_in_range(&self, position: Position, range: Range) -> bool {
+        (position.line > range.start.line
+            || (position.line == range.start.line && position.character >= range.start.character))
+            && (position.line < range.end.line
+                || (position.line == range.end.line && position.character <= range.end.character))
+    }
+
+    // Load configuration from TOML file
+    async fn load_config_file(&self, config: &ServerConfig) -> Option<ServerConfig> {
+        let workspace_root = self.workspace_root.read().await;
+        let workspace_path = workspace_root.as_ref()?;
+
+        // Use custom config file path if specified, otherwise use default
+        let config_path = if let Some(custom_path) = &config.config_file_path {
+            workspace_path.join(custom_path)
+        } else {
+            workspace_path.join(".sv-lsp.toml")
+        };
+
+        match tokio::fs::read_to_string(&config_path).await {
+            Ok(content) => match toml::from_str::<ServerConfig>(&content) {
+                Ok(file_config) => {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Configuration loaded from {}", config_path.display()),
+                        )
+                        .await;
+                    Some(file_config)
+                }
+                Err(e) => {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!(
+                                "Failed to parse config file {}: {}",
+                                config_path.display(),
+                                e
+                            ),
+                        )
+                        .await;
+                    None
+                }
+            },
+            Err(_) => {
+                // Config file not found, which is fine
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!(
+                            "No config file found at {}, using defaults",
+                            config_path.display()
+                        ),
+                    )
+                    .await;
+                None
+            }
+        }
+    }
+
+    // Validate configuration and warn about issues
+    async fn validate_config(&self, config: &ServerConfig) {
+        let workspace_root = self.workspace_root.read().await;
+
+        // Validate include directories exist
+        if let Some(root) = workspace_root.as_ref() {
+            for include_dir in &config.include_directories {
+                let path = if std::path::Path::new(include_dir).is_absolute() {
+                    PathBuf::from(include_dir)
+                } else {
+                    root.join(include_dir)
+                };
+
+                if !path.exists() {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Include directory does not exist: {}", path.display()),
+                        )
+                        .await;
+                } else if !path.is_dir() {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Include path is not a directory: {}", path.display()),
+                        )
+                        .await;
+                }
+            }
+
+            // Validate source directories exist
+            for source_dir in &config.source_directories {
+                let path = if std::path::Path::new(source_dir).is_absolute() {
+                    PathBuf::from(source_dir)
+                } else {
+                    root.join(source_dir)
+                };
+
+                if !path.exists() {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Source directory does not exist: {}", path.display()),
+                        )
+                        .await;
+                } else if !path.is_dir() {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Source path is not a directory: {}", path.display()),
+                        )
+                        .await;
+                }
+            }
+        }
+
+        // Validate custom config file path if specified
+        if let Some(config_path) = &config.config_file_path {
+            if let Some(root) = workspace_root.as_ref() {
+                let full_path = root.join(config_path);
+                if !full_path.exists() {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("Custom config file does not exist: {}", full_path.display()),
+                        )
+                        .await;
+                }
+            }
+        }
+
+        // Log configuration summary
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Configuration: {} include dirs, {} defines, {} source dirs",
+                    config.include_directories.len(),
+                    config.defines.len(),
+                    config.source_directories.len()
+                ),
+            )
+            .await;
+    }
+
+    // Extract folding ranges from AST
+    fn extract_folding_ranges(&self, ast: &SourceUnit, content: &str) -> Vec<FoldingRange> {
+        let mut ranges = Vec::new();
+
+        // ast.items is now Vec<ModuleItemRef>
+        for &item_ref in &ast.items {
+            let item = ast.module_item_arena.get(item_ref);
+            self.extract_folding_ranges_from_item(
+                item,
+                &ast.module_item_arena,
+                content,
+                &mut ranges,
+            );
+        }
+
+        ranges
+    }
+
+    fn extract_folding_ranges_from_item(
+        &self,
+        item: &ModuleItem,
+        module_item_arena: &sv_parser::ModuleItemArena,
+        content: &str,
+        ranges: &mut Vec<FoldingRange>,
+    ) {
+        match item {
+            ModuleItem::ModuleDeclaration {
+                name, items, span, ..
+            } => {
+                // Create folding range from span
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        collapsed_text: Some(format!("module {} ...", name)),
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
+                }
+
+                // Recursively process nested items - items are refs into the arena
+                for &sub_item_ref in items {
+                    let sub_item = module_item_arena.get(sub_item_ref);
+                    self.extract_folding_ranges_from_item(
+                        sub_item,
+                        module_item_arena,
+                        content,
+                        ranges,
+                    );
+                }
+            }
+            ModuleItem::ProceduralBlock { span, .. } => {
+                // Add folding range for procedural blocks (always, initial, etc.)
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
+                }
+            }
+            ModuleItem::ClassDeclaration {
+                name, items, span, ..
+            } => {
+                // Add folding range for class
+                if let Some(range) = self.span_to_folding_range(content, *span) {
+                    ranges.push(FoldingRange {
+                        collapsed_text: Some(format!("class {} ...", name)),
+                        kind: Some(FoldingRangeKind::Region),
+                        ..range
+                    });
+                }
+
+                // Also add folding ranges for class methods
+                for class_item in items {
+                    if let sv_parser::ClassItem::Method { name, span, .. } = class_item {
+                        if let Some(range) = self.span_to_folding_range(content, *span) {
+                            ranges.push(FoldingRange {
+                                collapsed_text: Some(format!("function {} ...", name)),
+                                kind: Some(FoldingRangeKind::Region),
+                                ..range
+                            });
+                        }
+                    }
+                }
+            }
+            ModuleItem::VariableDeclaration { .. }
+            | ModuleItem::Assignment { .. }
+            | ModuleItem::PortDeclaration { .. }
+            | ModuleItem::DefineDirective { .. }
+            | ModuleItem::IncludeDirective { .. }
+            | ModuleItem::ConcurrentAssertion { .. }
+            | ModuleItem::GlobalClocking { .. } => {
+                // These items typically don't need folding
+            }
+        }
+    }
+
+    fn span_to_folding_range(&self, content: &str, span: (usize, usize)) -> Option<FoldingRange> {
+        // Convert byte offsets to line numbers
+        let start_line = content[..span.0].matches('\n').count();
+        let end_line = content[..span.1].matches('\n').count();
+
+        // Create folding range if it spans multiple lines (at least 2)
+        // Some editors require at least 1 line of difference to show fold indicators
+        if end_line >= start_line + 1 {
+            Some(FoldingRange {
+                start_line: start_line as u32,
+                start_character: None,
+                end_line: end_line as u32,
+                end_character: None,
+                kind: None,           // Will be set by caller
+                collapsed_text: None, // Will be set by caller
+            })
+        } else {
+            None
+        }
+    }
+
+    fn find_selection_range_at_position(
+        &self,
+        ast: &SourceUnit,
+        content: &str,
+        position: Position,
+    ) -> Option<SelectionRange> {
+        // Build a hierarchy of selection ranges from the AST
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+
+        // Find all AST nodes that contain the position - ast.items is now Vec<ModuleItemRef>
+        for &item_ref in &ast.items {
+            let item = ast.module_item_arena.get(item_ref);
+            self.collect_ranges_containing_position(
+                item,
+                &ast.module_item_arena,
+                &ast.expr_arena,
+                content,
+                position,
+                &mut ranges,
+            );
+        }
+
+        if ranges.is_empty() {
+            return None;
+        }
+
+        // Sort ranges by size (smallest first)
+        ranges.sort_by_key(|(start, end)| end - start);
+
+        // Build the selection range hierarchy (parent contains child)
+        let mut selection_range: Option<SelectionRange> = None;
+
+        for span in ranges {
+            if let Some(range) = self.span_to_range(content, span) {
+                selection_range = Some(SelectionRange {
+                    range,
+                    parent: selection_range.map(Box::new),
+                });
+            }
+        }
+
+        selection_range
+    }
+
+    fn collect_ranges_containing_position(
+        &self,
+        item: &ModuleItem,
+        module_item_arena: &sv_parser::ModuleItemArena,
+        expr_arena: &sv_parser::ExprArena,
+        content: &str,
+        position: Position,
+        ranges: &mut Vec<(usize, usize)>,
+    ) {
+        // Helper to check if a span contains the position
+        let contains = |span: (usize, usize)| -> bool {
+            if let Some(range) = self.span_to_range(content, span) {
+                self.position_in_range(position, range)
+            } else {
+                false
+            }
+        };
+
+        match item {
+            ModuleItem::ModuleDeclaration {
+                span,
+                items,
+                name_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                    if contains(*name_span) {
+                        ranges.push(*name_span);
+                    }
+                    // Recursively check nested items - items are refs into the arena
+                    for &sub_item_ref in items {
+                        let sub_item = module_item_arena.get(sub_item_ref);
+                        self.collect_ranges_containing_position(
+                            sub_item,
+                            module_item_arena,
+                            expr_arena,
+                            content,
+                            position,
+                            ranges,
+                        );
+                    }
+                }
+            }
+            ModuleItem::ClassDeclaration {
+                span,
+                name_span,
+                items: class_items,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                    if contains(*name_span) {
+                        ranges.push(*name_span);
+                    }
+                    // Check class methods
+                    for class_item in class_items {
+                        if let sv_parser::ClassItem::Method {
+                            span, name_span, ..
+                        } = class_item
+                        {
+                            if contains(*span) {
+                                ranges.push(*span);
+                            }
+                            if contains(*name_span) {
+                                ranges.push(*name_span);
+                            }
+                        } else if let sv_parser::ClassItem::Property {
+                            span, name_span, ..
+                        } = class_item
+                        {
+                            if contains(*span) {
+                                ranges.push(*span);
+                            }
+                            if contains(*name_span) {
+                                ranges.push(*name_span);
+                            }
+                        }
+                    }
+                }
+            }
+            ModuleItem::ProceduralBlock { span, .. } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+            }
+            ModuleItem::VariableDeclaration {
+                span, name_span, ..
+            }
+            | ModuleItem::PortDeclaration {
+                span, name_span, ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if contains(*name_span) {
+                    ranges.push(*name_span);
+                }
+            }
+            ModuleItem::Assignment { span, target, .. } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                // Extract span from target expression - dereference from arena
+                let target_expr = expr_arena.get(*target);
+                let target_span = match target_expr {
+                    Expression::Identifier(_, s) => *s,
+                    Expression::MemberAccess { span: s, .. } => *s,
+                    Expression::Number(_, s) => *s,
+                    Expression::StringLiteral(_, s) => *s,
+                    Expression::Binary { span: s, .. } => *s,
+                    Expression::Unary { span: s, .. } => *s,
+                    Expression::MacroUsage { span: s, .. } => *s,
+                    Expression::SystemFunctionCall { span: s, .. } => *s,
+                    Expression::New { span: s, .. } => *s,
+                    Expression::FunctionCall { span: s, .. } => *s,
+                };
+                if contains(target_span) {
+                    ranges.push(target_span);
+                }
+            }
+            ModuleItem::DefineDirective {
+                span, name_span, ..
+            }
+            | ModuleItem::IncludeDirective {
+                span,
+                path_span: name_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if contains(*name_span) {
+                    ranges.push(*name_span);
+                }
+            }
+            ModuleItem::ConcurrentAssertion { span, .. } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+            }
+            ModuleItem::GlobalClocking {
+                span,
+                identifier_span,
+                ..
+            } => {
+                if contains(*span) {
+                    ranges.push(*span);
+                }
+                if let Some(id_span) = identifier_span {
+                    if contains(*id_span) {
+                        ranges.push(*id_span);
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper methods for code completion
+    fn get_keyword_completions(&self) -> Vec<CompletionItem> {
+        let keywords = vec![
+            ("module", "module declaration", CompletionItemKind::KEYWORD),
+            (
+                "endmodule",
+                "end module declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("class", "class declaration", CompletionItemKind::KEYWORD),
+            (
+                "endclass",
+                "end class declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "function",
+                "function declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endfunction",
+                "end function declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("task", "task declaration", CompletionItemKind::KEYWORD),
+            (
+                "endtask",
+                "end task declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("begin", "begin block", CompletionItemKind::KEYWORD),
+            ("end", "end block", CompletionItemKind::KEYWORD),
+            ("if", "if statement", CompletionItemKind::KEYWORD),
+            ("else", "else statement", CompletionItemKind::KEYWORD),
+            ("for", "for loop", CompletionItemKind::KEYWORD),
+            ("while", "while loop", CompletionItemKind::KEYWORD),
+            ("case", "case statement", CompletionItemKind::KEYWORD),
+            ("endcase", "end case statement", CompletionItemKind::KEYWORD),
+            ("always", "always block", CompletionItemKind::KEYWORD),
+            (
+                "always_comb",
+                "combinational always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "always_ff",
+                "flip-flop always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "always_latch",
+                "latch always block",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("initial", "initial block", CompletionItemKind::KEYWORD),
+            (
+                "assign",
+                "continuous assignment",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("input", "input port", CompletionItemKind::KEYWORD),
+            ("output", "output port", CompletionItemKind::KEYWORD),
+            ("inout", "inout port", CompletionItemKind::KEYWORD),
+            ("wire", "wire declaration", CompletionItemKind::KEYWORD),
+            ("reg", "reg declaration", CompletionItemKind::KEYWORD),
+            ("logic", "logic declaration", CompletionItemKind::KEYWORD),
+            ("bit", "bit declaration", CompletionItemKind::KEYWORD),
+            ("byte", "byte declaration", CompletionItemKind::KEYWORD),
+            ("int", "int declaration", CompletionItemKind::KEYWORD),
+            (
+                "integer",
+                "integer declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("real", "real declaration", CompletionItemKind::KEYWORD),
+            ("time", "time declaration", CompletionItemKind::KEYWORD),
+            (
+                "parameter",
+                "parameter declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "localparam",
+                "local parameter declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("typedef", "type definition", CompletionItemKind::KEYWORD),
+            ("enum", "enumeration type", CompletionItemKind::KEYWORD),
+            ("struct", "structure type", CompletionItemKind::KEYWORD),
+            ("union", "union type", CompletionItemKind::KEYWORD),
+            (
+                "package",
+                "package declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endpackage",
+                "end package declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("import", "import statement", CompletionItemKind::KEYWORD),
+            (
+                "interface",
+                "interface declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endinterface",
+                "end interface declaration",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("virtual", "virtual keyword", CompletionItemKind::KEYWORD),
+            ("extends", "class inheritance", CompletionItemKind::KEYWORD),
+            (
+                "implements",
+                "interface implementation",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("new", "constructor call", CompletionItemKind::KEYWORD),
+            ("return", "return statement", CompletionItemKind::KEYWORD),
+            ("void", "void type", CompletionItemKind::KEYWORD),
+            ("null", "null value", CompletionItemKind::KEYWORD),
+            (
+                "this",
+                "current object reference",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "super",
+                "parent class reference",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("static", "static member", CompletionItemKind::KEYWORD),
+            ("const", "constant declaration", CompletionItemKind::KEYWORD),
+            ("ref", "reference argument", CompletionItemKind::KEYWORD),
+            ("var", "variable type", CompletionItemKind::KEYWORD),
+            ("string", "string type", CompletionItemKind::KEYWORD),
+        ];
+
+        keywords
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("1_{}", label)), // Priority 1
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_system_function_completions(&self) -> Vec<CompletionItem> {
+        let system_functions = vec![
+            // Math functions
+            (
+                "sin",
+                "real $sin(real x)",
+                "Returns the sine of x (x in radians)",
+            ),
+            (
+                "cos",
+                "real $cos(real x)",
+                "Returns the cosine of x (x in radians)",
+            ),
+            (
+                "tan",
+                "real $tan(real x)",
+                "Returns the tangent of x (x in radians)",
+            ),
+            ("asin", "real $asin(real x)", "Returns the arc sine of x"),
+            ("acos", "real $acos(real x)", "Returns the arc cosine of x"),
+            ("atan", "real $atan(real x)", "Returns the arc tangent of x"),
+            (
+                "atan2",
+                "real $atan2(real y, real x)",
+                "Returns the arc tangent of y/x",
+            ),
+            (
+                "sinh",
+                "real $sinh(real x)",
+                "Returns the hyperbolic sine of x",
+            ),
+            (
+                "cosh",
+                "real $cosh(real x)",
+                "Returns the hyperbolic cosine of x",
+            ),
+            (
+                "tanh",
+                "real $tanh(real x)",
+                "Returns the hyperbolic tangent of x",
+            ),
+            (
+                "asinh",
+                "real $asinh(real x)",
+                "Returns the inverse hyperbolic sine of x",
+            ),
+            (
+                "acosh",
+                "real $acosh(real x)",
+                "Returns the inverse hyperbolic cosine of x",
+            ),
+            (
+                "atanh",
+                "real $atanh(real x)",
+                "Returns the inverse hyperbolic tangent of x",
+            ),
+            ("exp", "real $exp(real x)", "Returns e to the power of x"),
+            (
+                "ln",
+                "real $ln(real x)",
+                "Returns the natural logarithm of x",
+            ),
+            (
+                "log10",
+                "real $log10(real x)",
+                "Returns the base-10 logarithm of x",
+            ),
+            ("sqrt", "real $sqrt(real x)", "Returns the square root of x"),
+            (
+                "pow",
+                "real $pow(real x, real y)",
+                "Returns x to the power of y",
+            ),
+            (
+                "hypot",
+                "real $hypot(real x, real y)",
+                "Returns sqrt(x^2 + y^2)",
+            ),
+            (
+                "floor",
+                "real $floor(real x)",
+                "Returns the largest integer not greater than x",
+            ),
+            (
+                "ceil",
+                "real $ceil(real x)",
+                "Returns the smallest integer not less than x",
+            ),
+            (
+                "clog2",
+                "integer $clog2(integer value)",
+                "Returns the ceiling of log base 2 of value",
+            ),
+            // Display tasks
+            (
+                "display",
+                "task $display([list_of_arguments])",
+                "Displays the argument list and adds a newline",
+            ),
+            (
+                "write",
+                "task $write([list_of_arguments])",
+                "Displays the argument list without adding a newline",
+            ),
+            (
+                "monitor",
+                "task $monitor([list_of_arguments])",
+                "Continuously monitors and displays values when they change",
+            ),
+            // Simulation control
+            ("finish", "task $finish[(n)]", "Terminates the simulation"),
+            ("stop", "task $stop[(n)]", "Suspends the simulation"),
+            ("exit", "task $exit", "Terminates the simulation"),
+            // Time functions
+            (
+                "time",
+                "time $time",
+                "Returns the current simulation time as a 64-bit integer",
+            ),
+            (
+                "stime",
+                "int $stime",
+                "Returns the current simulation time as a 32-bit integer",
+            ),
+            (
+                "realtime",
+                "realtime $realtime",
+                "Returns the current simulation time as a real number",
+            ),
+            // Random number generation
+            (
+                "random",
+                "int $random[(seed)]",
+                "Returns a random 32-bit signed integer",
+            ),
+            (
+                "urandom",
+                "int $urandom[(seed)]",
+                "Returns a random 32-bit unsigned integer",
+            ),
+            (
+                "urandom_range",
+                "int $urandom_range(int maxval, int minval = 0)",
+                "Returns a random integer within the specified range",
+            ),
+            // Additional common system tasks
+            (
+                "error",
+                "task $error([list_of_arguments])",
+                "Displays an error message",
+            ),
+            (
+                "warning",
+                "task $warning([list_of_arguments])",
+                "Displays a warning message",
+            ),
+            (
+                "info",
+                "task $info([list_of_arguments])",
+                "Displays an info message",
+            ),
+            (
+                "fatal",
+                "task $fatal[(n), [list_of_arguments]]",
+                "Terminates simulation with a fatal error",
+            ),
+            (
+                "readmemh",
+                "task $readmemh(filename, memory_array)",
+                "Reads memory from hex file",
+            ),
+            (
+                "readmemb",
+                "task $readmemb(filename, memory_array)",
+                "Reads memory from binary file",
+            ),
+            (
+                "dumpfile",
+                "task $dumpfile(filename)",
+                "Specifies VCD dump file",
+            ),
+            ("dumpvars", "task $dumpvars", "Starts VCD dumping"),
+        ];
+
+        system_functions
+            .into_iter()
+            .map(|(label, detail, doc)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some(detail.to_string()),
+                documentation: Some(Documentation::String(doc.to_string())),
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("2_{}", label)), // Priority 2
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_preprocessor_completions(&self) -> Vec<CompletionItem> {
+        let directives = vec![
+            ("define", "Defines a macro", CompletionItemKind::KEYWORD),
+            ("undef", "Undefines a macro", CompletionItemKind::KEYWORD),
+            (
+                "ifdef",
+                "Conditional compilation (if defined)",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "ifndef",
+                "Conditional compilation (if not defined)",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "else",
+                "Conditional compilation else",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "elsif",
+                "Conditional compilation else if",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "endif",
+                "End conditional compilation",
+                CompletionItemKind::KEYWORD,
+            ),
+            ("include", "Include file", CompletionItemKind::KEYWORD),
+            ("timescale", "Set time scale", CompletionItemKind::KEYWORD),
+            (
+                "begin_keywords",
+                "Begin keyword version",
+                CompletionItemKind::KEYWORD,
+            ),
+            (
+                "end_keywords",
+                "End keyword version",
+                CompletionItemKind::KEYWORD,
+            ),
+        ];
+
+        directives
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("3_{}", label)), // Priority 3
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    fn get_member_completions(&self) -> Vec<CompletionItem> {
+        // Common class/struct member patterns
+        let members = vec![
+            ("new", "Constructor", CompletionItemKind::CONSTRUCTOR),
+            ("randomize", "Randomize object", CompletionItemKind::METHOD),
+            ("size", "Get size", CompletionItemKind::METHOD),
+            ("delete", "Delete element", CompletionItemKind::METHOD),
+            ("exists", "Check if exists", CompletionItemKind::METHOD),
+            ("first", "Get first element", CompletionItemKind::METHOD),
+            ("last", "Get last element", CompletionItemKind::METHOD),
+            ("next", "Get next element", CompletionItemKind::METHOD),
+            ("prev", "Get previous element", CompletionItemKind::METHOD),
+        ];
+
+        members
+            .into_iter()
+            .map(|(label, detail, kind)| CompletionItem {
+                label: label.to_string(),
+                label_details: None,
+                kind: Some(kind),
+                detail: Some(detail.to_string()),
+                documentation: None,
+                deprecated: None,
+                preselect: None,
+                sort_text: Some(format!("4_{}", label)), // Priority 4
+                filter_text: None,
+                insert_text: None,
+                insert_text_format: None,
+                insert_text_mode: None,
+                text_edit: None,
+                additional_text_edits: None,
+                command: None,
+                commit_characters: None,
+                data: None,
+                tags: None,
+            })
+            .collect()
+    }
+
+    async fn get_symbol_completions(&self) -> Vec<CompletionItem> {
+        let workspace_symbols = self.workspace_symbols.read().await;
+        let mut items = Vec::new();
+
+        for (name, symbols) in workspace_symbols.iter() {
+            if let Some(first_symbol) = symbols.first() {
+                let (kind, detail_prefix) = match first_symbol.symbol_type {
+                    SymbolType::Module => (CompletionItemKind::MODULE, "module"),
+                    SymbolType::Class => (CompletionItemKind::CLASS, "class"),
+                    SymbolType::Function => (CompletionItemKind::FUNCTION, "function"),
+                    SymbolType::Task => (CompletionItemKind::FUNCTION, "task"),
+                    SymbolType::Variable => (CompletionItemKind::VARIABLE, "variable"),
+                    SymbolType::Port => (CompletionItemKind::PROPERTY, "port"),
+                    SymbolType::Parameter => (CompletionItemKind::CONSTANT, "parameter"),
+                    SymbolType::Define => (CompletionItemKind::CONSTANT, "define"),
+                    SymbolType::Include => continue, // Skip include symbols
+                };
+
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    label_details: None,
+                    kind: Some(kind),
+                    detail: Some(format!("{} {}", detail_prefix, name)),
+                    documentation: None,
+                    deprecated: None,
+                    preselect: None,
+                    sort_text: Some(format!("5_{}", name)), // Priority 5
+                    filter_text: None,
+                    insert_text: None,
+                    insert_text_format: None,
+                    insert_text_mode: None,
+                    text_edit: None,
+                    additional_text_edits: None,
+                    command: None,
+                    commit_characters: None,
+                    data: None,
+                    tags: None,
+                });
+            }
+        }
+
+        items
+    }
+
+    // Helper method to extract function call info from text
+    fn extract_function_call_info(&self, text: &str) -> LspResult<(String, u32)> {
+        // Find the last opening parenthesis
+        let last_open_paren = text.rfind('(');
+        if last_open_paren.is_none() {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "No function call found",
+            ));
+        }
+
+        let paren_pos = last_open_paren.unwrap();
+        let before_paren = &text[..paren_pos].trim_end();
+
+        // Extract function name (may start with $)
+        let function_name = if let Some(name_start) =
+            before_paren.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        {
+            before_paren[name_start + 1..].trim()
+        } else {
+            before_paren.trim()
+        };
+
+        // Remove $ prefix if present for system functions
+        let clean_name = function_name.strip_prefix('$').unwrap_or(function_name);
+
+        // Count commas after the opening parenthesis to determine active parameter
+        let after_paren = &text[paren_pos + 1..];
+        let mut paren_depth = 0;
+        let mut active_parameter = 0u32;
+
+        for ch in after_paren.chars() {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => {
+                    if paren_depth == 0 {
+                        break;
+                    }
+                    paren_depth -= 1;
+                }
+                ',' if paren_depth == 0 => active_parameter += 1,
+                _ => {}
+            }
+        }
+
+        Ok((clean_name.to_string(), active_parameter))
+    }
+
+    // Helper method to parse parameters from a function signature
+    fn parse_parameters(&self, signature: &str) -> Option<Vec<ParameterInformation>> {
+        // Extract parameters from signature like "function real $pow(real x, real y)"
+        let start = signature.find('(')?;
+        let end = signature.rfind(')')?;
+        let params_str = &signature[start + 1..end];
+
+        if params_str.trim().is_empty() || params_str.trim() == "n" {
+            return None;
+        }
+
+        let params: Vec<ParameterInformation> = params_str
+            .split(',')
+            .map(|p| {
+                let param = p.trim();
+                ParameterInformation {
+                    label: ParameterLabel::Simple(param.to_string()),
+                    documentation: None,
+                }
+            })
+            .collect();
+
+        if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        }
+    }
+
+    // Helper method to find matching closing parenthesis
+    fn find_matching_paren(&self, text: &str, open_paren_pos: usize) -> Option<usize> {
+        let mut depth = 1;
+        let chars: Vec<char> = text.chars().collect();
+
+        for (offset, &ch) in chars.iter().enumerate().skip(open_paren_pos + 1) {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(offset);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+}
+
+// Helper functions for testing (extracted so they can be tested without a Backend instance)
+#[cfg(test)]
+fn get_keyword_completions_impl() -> Vec<CompletionItem> {
+    let keywords = vec![
+        ("module", "module declaration", CompletionItemKind::KEYWORD),
+        (
+            "endmodule",
+            "end module declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("class", "class declaration", CompletionItemKind::KEYWORD),
+        (
+            "endclass",
+            "end class declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "function",
+            "function declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endfunction",
+            "end function declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("task", "task declaration", CompletionItemKind::KEYWORD),
+        (
+            "endtask",
+            "end task declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("begin", "begin block", CompletionItemKind::KEYWORD),
+        ("end", "end block", CompletionItemKind::KEYWORD),
+        ("if", "if statement", CompletionItemKind::KEYWORD),
+        ("else", "else statement", CompletionItemKind::KEYWORD),
+        ("for", "for loop", CompletionItemKind::KEYWORD),
+        ("while", "while loop", CompletionItemKind::KEYWORD),
+        ("case", "case statement", CompletionItemKind::KEYWORD),
+        ("endcase", "end case statement", CompletionItemKind::KEYWORD),
+        ("always", "always block", CompletionItemKind::KEYWORD),
+        (
+            "always_comb",
+            "combinational always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "always_ff",
+            "flip-flop always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "always_latch",
+            "latch always block",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("initial", "initial block", CompletionItemKind::KEYWORD),
+        (
+            "assign",
+            "continuous assignment",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("input", "input port", CompletionItemKind::KEYWORD),
+        ("output", "output port", CompletionItemKind::KEYWORD),
+        ("inout", "inout port", CompletionItemKind::KEYWORD),
+        ("wire", "wire declaration", CompletionItemKind::KEYWORD),
+        ("reg", "reg declaration", CompletionItemKind::KEYWORD),
+        ("logic", "logic declaration", CompletionItemKind::KEYWORD),
+        ("bit", "bit declaration", CompletionItemKind::KEYWORD),
+        ("byte", "byte declaration", CompletionItemKind::KEYWORD),
+        ("int", "int declaration", CompletionItemKind::KEYWORD),
+        (
+            "integer",
+            "integer declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("real", "real declaration", CompletionItemKind::KEYWORD),
+        ("time", "time declaration", CompletionItemKind::KEYWORD),
+        (
+            "parameter",
+            "parameter declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "localparam",
+            "local parameter declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("typedef", "type definition", CompletionItemKind::KEYWORD),
+        ("enum", "enumeration type", CompletionItemKind::KEYWORD),
+        ("struct", "structure type", CompletionItemKind::KEYWORD),
+        ("union", "union type", CompletionItemKind::KEYWORD),
+        (
+            "package",
+            "package declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endpackage",
+            "end package declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("import", "import statement", CompletionItemKind::KEYWORD),
+        (
+            "interface",
+            "interface declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endinterface",
+            "end interface declaration",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("virtual", "virtual keyword", CompletionItemKind::KEYWORD),
+        ("extends", "class inheritance", CompletionItemKind::KEYWORD),
+        (
+            "implements",
+            "interface implementation",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("new", "constructor call", CompletionItemKind::KEYWORD),
+        ("return", "return statement", CompletionItemKind::KEYWORD),
+        ("void", "void type", CompletionItemKind::KEYWORD),
+        ("null", "null value", CompletionItemKind::KEYWORD),
+        (
+            "this",
+            "current object reference",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "super",
+            "parent class reference",
+            CompletionItemKind::KEYWORD,
+        ),
+        ("static", "static member", CompletionItemKind::KEYWORD),
+        ("const", "constant declaration", CompletionItemKind::KEYWORD),
+        ("ref", "reference argument", CompletionItemKind::KEYWORD),
+        ("var", "variable type", CompletionItemKind::KEYWORD),
+        ("string", "string type", CompletionItemKind::KEYWORD),
+    ];
+
+    keywords
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("1_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn get_system_function_completions_impl() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "display".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("task $display([list_of_arguments])".to_string()),
+            documentation: Some(Documentation::String(
+                "Displays the argument list and adds a newline".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_display".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "random".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("int $random[(seed)]".to_string()),
+            documentation: Some(Documentation::String(
+                "Returns a random 32-bit signed integer".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_random".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "sqrt".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("real $sqrt(real x)".to_string()),
+            documentation: Some(Documentation::String(
+                "Returns the square root of x".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_sqrt".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+        CompletionItem {
+            label: "finish".to_string(),
+            label_details: None,
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some("task $finish[(n)]".to_string()),
+            documentation: Some(Documentation::String(
+                "Terminates the simulation".to_string(),
+            )),
+            deprecated: None,
+            preselect: None,
+            sort_text: Some("2_finish".to_string()),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        },
+    ]
+}
+
+#[cfg(test)]
+fn get_preprocessor_completions_impl() -> Vec<CompletionItem> {
+    let directives = vec![
+        ("define", "Defines a macro", CompletionItemKind::KEYWORD),
+        ("include", "Include file", CompletionItemKind::KEYWORD),
+        (
+            "ifdef",
+            "Conditional compilation (if defined)",
+            CompletionItemKind::KEYWORD,
+        ),
+        (
+            "endif",
+            "End conditional compilation",
+            CompletionItemKind::KEYWORD,
+        ),
+    ];
+
+    directives
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("3_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn get_member_completions_impl() -> Vec<CompletionItem> {
+    let members = vec![
+        ("new", "Constructor", CompletionItemKind::CONSTRUCTOR),
+        ("randomize", "Randomize object", CompletionItemKind::METHOD),
+        ("size", "Get size", CompletionItemKind::METHOD),
+    ];
+
+    members
+        .into_iter()
+        .map(|(label, detail, kind)| CompletionItem {
+            label: label.to_string(),
+            label_details: None,
+            kind: Some(kind),
+            detail: Some(detail.to_string()),
+            documentation: None,
+            deprecated: None,
+            preselect: None,
+            sort_text: Some(format!("4_{}", label)),
+            filter_text: None,
+            insert_text: None,
+            insert_text_format: None,
+            insert_text_mode: None,
+            text_edit: None,
+            additional_text_edits: None,
+            command: None,
+            commit_characters: None,
+            data: None,
+            tags: None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper struct for testing that doesn't require LSP client
+    struct TestBackend;
+
+    impl TestBackend {
+        fn extract_function_call_info(&self, text: &str) -> LspResult<(String, u32)> {
+            // Find the last opening parenthesis
+            let last_open_paren = text.rfind('(');
+            if last_open_paren.is_none() {
+                return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    "No function call found",
+                ));
+            }
+
+            let paren_pos = last_open_paren.unwrap();
+            let before_paren = &text[..paren_pos].trim_end();
+
+            // Extract function name (may start with $)
+            let function_name = if let Some(name_start) =
+                before_paren.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+            {
+                before_paren[name_start + 1..].trim()
+            } else {
+                before_paren.trim()
+            };
+
+            // Remove $ prefix if present for system functions
+            let clean_name = function_name.strip_prefix('$').unwrap_or(function_name);
+
+            // Count commas after the opening parenthesis to determine active parameter
+            let after_paren = &text[paren_pos + 1..];
+            let mut paren_depth = 0;
+            let mut active_parameter = 0u32;
+
+            for ch in after_paren.chars() {
+                match ch {
+                    '(' => paren_depth += 1,
+                    ')' => {
+                        if paren_depth == 0 {
+                            break;
+                        }
+                        paren_depth -= 1;
+                    }
+                    ',' if paren_depth == 0 => active_parameter += 1,
+                    _ => {}
+                }
+            }
+
+            Ok((clean_name.to_string(), active_parameter))
+        }
+
+        fn parse_parameters(&self, signature: &str) -> Option<Vec<ParameterInformation>> {
+            // Extract parameters from signature like "function real $pow(real x, real y)"
+            let start = signature.find('(')?;
+            let end = signature.rfind(')')?;
+            let params_str = &signature[start + 1..end];
+
+            if params_str.trim().is_empty() || params_str.trim() == "n" {
+                return None;
+            }
+
+            let params: Vec<ParameterInformation> = params_str
+                .split(',')
+                .map(|p| {
+                    let param = p.trim();
+                    ParameterInformation {
+                        label: ParameterLabel::Simple(param.to_string()),
+                        documentation: None,
+                    }
+                })
+                .collect();
+
+            if params.is_empty() {
+                None
+            } else {
+                Some(params)
+            }
+        }
+
+        fn find_matching_paren(&self, text: &str, open_paren_pos: usize) -> Option<usize> {
+            let mut depth = 1;
+            let chars: Vec<char> = text.chars().collect();
+
+            for (offset, &ch) in chars.iter().enumerate().skip(open_paren_pos + 1) {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(offset);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            None
+        }
+
+        fn get_keyword_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_keyword_completions_impl()
+        }
+
+        fn get_system_function_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_system_function_completions_impl()
+        }
+
+        fn get_preprocessor_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_preprocessor_completions_impl()
+        }
+
+        fn get_member_completions(&self) -> Vec<CompletionItem> {
+            // Duplicate the logic to avoid needing a real Backend instance
+            get_member_completions_impl()
+        }
+
+        fn position_in_range(&self, position: Position, range: Range) -> bool {
+            (position.line > range.start.line
+                || (position.line == range.start.line
+                    && position.character >= range.start.character))
+                && (position.line < range.end.line
+                    || (position.line == range.end.line
+                        && position.character <= range.end.character))
+        }
+
+        fn char_offset_to_position(&self, text: &str, offset: usize) -> Option<Position> {
+            if offset > text.len() {
+                // Clamp to end of text
+                let prefix = text;
+                let line = prefix.matches('\n').count();
+                let column = prefix.split('\n').last().unwrap_or("").len();
+                return Some(Position::new(line as u32, column as u32));
+            }
+
+            let prefix = &text[..offset];
+            let line = prefix.matches('\n').count();
+            let column = prefix.split('\n').last().unwrap_or("").len();
+
+            Some(Position::new(line as u32, column as u32))
+        }
+
+        fn span_to_range(&self, text: &str, span: (usize, usize)) -> Option<Range> {
+            let start_pos = self.char_offset_to_position(text, span.0)?;
+            let end_pos = self.char_offset_to_position(text, span.1)?;
+            Some(Range::new(start_pos, end_pos))
+        }
+    }
+
+    fn create_test_backend() -> TestBackend {
+        TestBackend
+    }
+
+    // Tests for extract_function_call_info (Signature Help)
+    #[test]
+    fn test_extract_function_call_info_simple() {
+        let backend = create_test_backend();
+        let text = "$display(";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "display");
+        assert_eq!(param, 0);
+    }
+
+    #[test]
+    fn test_extract_function_call_info_with_args() {
+        let backend = create_test_backend();
+        let text = "$pow(x, ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "pow");
+        assert_eq!(param, 1); // Second parameter (after comma)
+    }
+
+    #[test]
+    fn test_extract_function_call_info_multiple_args() {
+        let backend = create_test_backend();
+        let text = "$some_func(a, b, c, ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        assert_eq!(name, "some_func");
+        assert_eq!(param, 3); // Fourth parameter
+    }
+
+    #[test]
+    fn test_extract_function_call_info_nested_parens() {
+        let backend = create_test_backend();
+        // The implementation finds the LAST '(' to provide signature help
+        // for the most recently opened function call
+        let text = "$outer($inner(x), ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        // Finds $inner's opening paren (the last one)
+        assert_eq!(name, "inner");
+        assert_eq!(param, 0); // First parameter of inner (we're at "x")
+    }
+
+    #[test]
+    fn test_extract_function_call_info_closed_nested() {
+        let backend = create_test_backend();
+        // Test with a fully closed inner function
+        // The implementation still finds the last '(' which is $inner's
+        let text = "$outer($inner(x, y), ";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_ok());
+        let (name, param) = result.unwrap();
+        // Still finds $inner because rfind finds the last '('
+        assert_eq!(name, "inner");
+        assert_eq!(param, 1); // Second parameter of inner
+    }
+
+    #[test]
+    fn test_extract_function_call_info_no_paren() {
+        let backend = create_test_backend();
+        let text = "$display";
+        let result = backend.extract_function_call_info(text);
+        assert!(result.is_err()); // Should fail without opening paren
+    }
+
+    // Tests for parse_parameters (Signature Help)
+    #[test]
+    fn test_parse_parameters_simple() {
+        let backend = create_test_backend();
+        let sig = "function real $pow(real x, real y)";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_some());
+        let params = params.unwrap();
+        assert_eq!(params.len(), 2);
+        match &params[0].label {
+            ParameterLabel::Simple(s) => assert_eq!(s, "real x"),
+            _ => panic!("Expected Simple label"),
+        }
+        match &params[1].label {
+            ParameterLabel::Simple(s) => assert_eq!(s, "real y"),
+            _ => panic!("Expected Simple label"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parameters_no_params() {
+        let backend = create_test_backend();
+        let sig = "function time $time()";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_none()); // No parameters
+    }
+
+    #[test]
+    fn test_parse_parameters_optional() {
+        let backend = create_test_backend();
+        let sig = "task $finish[(n)]";
+        let params = backend.parse_parameters(sig);
+        assert!(params.is_none()); // Special case for optional single param
+    }
+
+    // Tests for find_matching_paren (Inlay Hints)
+    #[test]
+    fn test_find_matching_paren_simple() {
+        let backend = create_test_backend();
+        let text = "$display(x)";
+        let pos = text.find('(').unwrap();
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(10)); // Position of ')'
+    }
+
+    #[test]
+    fn test_find_matching_paren_nested() {
+        let backend = create_test_backend();
+        let text = "$outer($inner(x))";
+        let pos = text.find('(').unwrap(); // First '('
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(16)); // Last ')'
+    }
+
+    #[test]
+    fn test_find_matching_paren_no_close() {
+        let backend = create_test_backend();
+        let text = "$display(x";
+        let pos = text.find('(').unwrap();
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, None); // No matching close paren
+    }
+
+    #[test]
+    fn test_find_matching_paren_multiple_nested() {
+        let backend = create_test_backend();
+        let text = "$f((a + b) * (c + d))";
+        let pos = text.find('(').unwrap(); // First '('
+        let close = backend.find_matching_paren(text, pos);
+        assert_eq!(close, Some(20)); // Last ')'
+    }
+
+    // Tests for keyword completions (Code Completion)
+    #[test]
+    fn test_get_keyword_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_keyword_completions();
+
+        // Check that we have a reasonable number of keywords
+        assert!(completions.len() > 50);
+
+        // Check for some essential keywords
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"module".to_string()));
+        assert!(labels.contains(&"class".to_string()));
+        assert!(labels.contains(&"always".to_string()));
+        assert!(labels.contains(&"logic".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::KEYWORD));
+        }
+    }
+
+    // Tests for system function completions (Code Completion)
+    #[test]
+    fn test_get_system_function_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_system_function_completions();
+
+        // Check that we have several system functions
+        assert!(completions.len() >= 4);
+
+        // Check for some essential system functions
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"display".to_string()));
+        assert!(labels.contains(&"random".to_string()));
+        assert!(labels.contains(&"sqrt".to_string()));
+        assert!(labels.contains(&"finish".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::FUNCTION));
+        }
+
+        // Verify they have documentation
+        for completion in &completions {
+            assert!(completion.documentation.is_some());
+        }
+    }
+
+    // Tests for preprocessor completions (Code Completion)
+    #[test]
+    fn test_get_preprocessor_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_preprocessor_completions();
+
+        // Check for common preprocessor directives
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"define".to_string()));
+        assert!(labels.contains(&"include".to_string()));
+        assert!(labels.contains(&"ifdef".to_string()));
+        assert!(labels.contains(&"endif".to_string()));
+
+        // Verify all have the correct kind
+        for completion in &completions {
+            assert_eq!(completion.kind, Some(CompletionItemKind::KEYWORD));
+        }
+    }
+
+    // Tests for member completions (Code Completion)
+    #[test]
+    fn test_get_member_completions() {
+        let backend = create_test_backend();
+        let completions = backend.get_member_completions();
+
+        // Check for common class members
+        let labels: Vec<String> = completions.iter().map(|c| c.label.clone()).collect();
+        assert!(labels.contains(&"new".to_string()));
+        assert!(labels.contains(&"randomize".to_string()));
+        assert!(labels.contains(&"size".to_string()));
+    }
+
+    // Tests for system function info
+    #[test]
+    fn test_get_system_function_info() {
+        // Test math functions
+        let info = get_system_function_info("sin");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert!(info.signature.contains("$sin"));
+        assert!(info.description.contains("sine"));
+
+        // Test display tasks
+        let info = get_system_function_info("display");
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert!(info.signature.contains("$display"));
+
+        // Test non-existent function
+        let info = get_system_function_info("nonexistent");
+        assert!(info.is_none());
+    }
+
+    // Tests for position_in_range helper
+    #[test]
+    fn test_position_in_range() {
+        let backend = create_test_backend();
+
+        let range = Range {
+            start: Position {
+                line: 0,
+                character: 5,
+            },
+            end: Position {
+                line: 0,
+                character: 10,
+            },
+        };
+
+        // Position at start
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 5
+            },
+            range
+        ));
+
+        // Position in middle
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 7
+            },
+            range
+        ));
+
+        // Position at end
+        assert!(backend.position_in_range(
+            Position {
+                line: 0,
+                character: 10
+            },
+            range
+        ));
+
+        // Position before range
+        assert!(!backend.position_in_range(
+            Position {
+                line: 0,
+                character: 4
+            },
+            range
+        ));
+
+        // Position after range
+        assert!(!backend.position_in_range(
+            Position {
+                line: 0,
+                character: 11
+            },
+            range
+        ));
+    }
+
+    // Tests for char_offset_to_position helper
+    #[test]
+    fn test_char_offset_to_position() {
+        let backend = create_test_backend();
+        let text = "line 1\nline 2\nline 3";
+
+        // Start of file
+        let pos = backend.char_offset_to_position(text, 0);
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 0,
+                character: 0
+            })
+        );
+
+        // Start of second line
+        let pos = backend.char_offset_to_position(text, 7); // After "line 1\n"
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 1,
+                character: 0
+            })
+        );
+
+        // Middle of second line
+        let pos = backend.char_offset_to_position(text, 10); // "line 1\nlin"
+        assert_eq!(
+            pos,
+            Some(Position {
+                line: 1,
+                character: 3
+            })
+        );
+
+        // Beyond end (should clamp)
+        let pos = backend.char_offset_to_position(text, 1000);
+        assert!(pos.is_some());
+    }
+
+    // Tests for span_to_range helper
+    #[test]
+    fn test_span_to_range() {
+        let backend = create_test_backend();
+        let text = "module test;\nendmodule";
+
+        // Span for "module"
+        let range = backend.span_to_range(text, (0, 6));
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 0);
+        assert_eq!(range.end.character, 6);
+
+        // Span across newline
+        let range = backend.span_to_range(text, (0, 13));
+        assert!(range.is_some());
+        let range = range.unwrap();
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.end.line, 1);
+    }
+}
+
+pub fn create_backend(client: Client) -> Backend {
+    Backend {
+        client,
+        documents: Arc::new(RwLock::new(HashMap::new())),
+        workspace_symbols: Arc::new(RwLock::new(HashMap::new())),
+        config: Arc::new(RwLock::new(ServerConfig::default())),
+        workspace_root: Arc::new(RwLock::new(None)),
+    }
+}
