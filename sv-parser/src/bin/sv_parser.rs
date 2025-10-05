@@ -5,7 +5,7 @@ use sv_parser::{parse_vcs_style_args, SystemVerilogParser};
 
 #[derive(Parser)]
 #[command(name = "sv_parser")]
-#[command(about = "A SystemVerilog parser using chumsky.")]
+#[command(about = "Parser for very -- the SystemVerilog Language Server")]
 #[command(version)]
 #[command(disable_help_flag = true)]
 struct Cli {

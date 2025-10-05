@@ -2,7 +2,7 @@
 name = "sv-language-server"
 version = "0.1.0"
 edition = "2021"
-description = "SystemVerilog Language Server using the sv-parser"
+description = "The front-end language server implementation for very -- a very nice SystemVerilog language server"
 
 [lib]
 name = "sv_language_server"

@@ -2,7 +2,7 @@
 name = "sv-parser"
 version = "0.1.0"
 edition = "2021"
-description = "A SystemVerilog parser using chumsky"
+description = "The parser for very -- a very nice SystemVerilog language server"
 
 [dependencies]
 chumsky = { workspace = true }
